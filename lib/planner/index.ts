@@ -2,6 +2,8 @@ import { Distance } from '../distance';
 import type { Target } from '../target';
 import { Task } from '../task';
 import { findPlan } from './findPlan';
+import type { BestPlanOptions } from './findBestPlan';
+import { findBestPlan as _findBestPlan } from './findBestPlan';
 import type { PlannerConfig } from './types';
 import { Aborted } from './types';
 import type { Plan } from './plan';
@@ -11,6 +13,7 @@ import * as DAG from '../dag';
 export * from './types';
 export * from './plan';
 export * from './node';
+export type { BestPlanOptions } from './findBestPlan';
 
 export interface Planner<TState = any> {
 	/**
@@ -19,6 +22,11 @@ export interface Planner<TState = any> {
 	 * cannot be found.
 	 */
 	findPlan(current: TState, target: Target<TState>): Plan<TState>;
+	findBestPlan(
+		current: TState,
+		target: Target<TState>,
+		options?: BestPlanOptions,
+	): Plan<TState>;
 }
 
 function from<TState = any>({
@@ -95,6 +103,41 @@ function from<TState = any>({
 					trace(e);
 					trace({ event: 'failed' });
 
+					return { success: false, stats: e.stats, error: e };
+				}
+				throw e;
+			}
+		},
+		findBestPlan(
+			current: TState,
+			target: Target<TState>,
+			options: BestPlanOptions = {},
+		) {
+			current = structuredClone(current);
+			const time = performance.now();
+			trace({ event: 'start', target });
+			try {
+				const res = _findBestPlan(
+					current,
+					target,
+					tasks,
+					{ trace, maxSearchDepth },
+					options,
+				);
+				res.stats = { ...res.stats, time: performance.now() - time };
+				if (res.success) {
+					const start = DAG.reverse(res.start);
+					assert(!Array.isArray(start));
+					res.start = start;
+					trace({ event: 'success', start });
+				} else {
+					trace({ event: 'failed' });
+				}
+				return res;
+			} catch (e) {
+				if (e instanceof Aborted) {
+					trace(e);
+					trace({ event: 'failed' });
 					return { success: false, stats: e.stats, error: e };
 				}
 				throw e;

@@ -3,7 +3,7 @@ import type { AnyOp, Update, Create } from '../operation';
 import type { PathType, Root } from '../path';
 import type { View } from '../view';
 import type { Context } from './context';
-import type { Instruction, MethodExpansion } from './instructions';
+import type { Instruction, MethodExpansion, Estimate } from './instructions';
 import type { ReadOnly } from '../readonly';
 
 export type ContextWithSystem<
@@ -91,6 +91,11 @@ export interface ActionTaskProps<
 	description?: DescriptionFn<TState, TPath, TOp>;
 
 	/**
+	 * Optional cost estimate for this task
+	 */
+	estimate?: Estimate;
+
+	/**
 	 * A condition that must be met for the task to be chosen by the planner or executed by
 	 * an agent.
 	 */
@@ -167,6 +172,11 @@ export type MethodTaskProps<
 	 * be compared by their description (useful for testing and debugging).
 	 */
 	description?: DescriptionFn<TState, TPath, TOp>;
+
+	/**
+	 * Optional cost estimate for this task
+	 */
+	estimate?: Estimate;
 
 	/**
 	 * The method expansion. The default is 'detect', meaning the planner will try to execute
