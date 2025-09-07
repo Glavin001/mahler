@@ -214,7 +214,7 @@ function tryParallel<TState = any>(
 	// having the fork and empty node, so we need to remove the empty node
 	// and connect the last action in the branch directly to the existing plan
 	if (results.length === 1) {
-		const branch = results[0]!;
+		const branch = results[0];
 		// Find the first node for which the next element is the
 		// empty node created earlier
 		const last = DAG.find(

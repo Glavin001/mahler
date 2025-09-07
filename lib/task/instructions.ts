@@ -3,6 +3,10 @@ import type { Context } from './context';
 import type { Ref } from '../ref';
 import type { AnyOp, Update, Create } from '../operation';
 
+export type Estimate<TState = any, Ctx = any> =
+	| number
+	| ((state: TState, ctx: Ctx) => number);
+
 interface Instance<TState, TPath extends PathType, TOp extends AnyOp> {
 	/**
 	 * The identifier for the task
@@ -30,6 +34,11 @@ interface Instance<TState, TPath extends PathType, TOp extends AnyOp> {
 	 * A pre-condition that needs to be met before the instance can be used
 	 */
 	condition(s: TState): boolean;
+
+	/**
+	 * Optional estimate of the cost of running this instruction
+	 */
+	readonly estimate?: Estimate;
 }
 
 /** An action task that has been applied to a specific context */

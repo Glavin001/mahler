@@ -21,6 +21,7 @@ export interface PlanAction<TState> extends DAG.Value {
 	 * The action to execute
 	 */
 	readonly action: Action<TState>;
+	readonly duration?: number;
 }
 
 export type PlanNode<TState> = PlanAction<TState> | Fork | Join;
@@ -57,9 +58,17 @@ export const PlanAction = {
 			)
 			.digest('hex');
 
+		const duration =
+			typeof a.estimate === 'function'
+				? Math.max(0, a.estimate(state, { target: a.target, path: a.path }))
+				: typeof a.estimate === 'number'
+					? Math.max(0, a.estimate)
+					: undefined;
+
 		return DAG.createValue({
 			id,
 			action: a,
+			duration,
 			next: null,
 		});
 	},

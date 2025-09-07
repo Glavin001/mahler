@@ -9,7 +9,7 @@ import type { Ref } from '../ref';
 import { View } from '../view';
 import type { TaskArgs, TaskOp } from './context';
 import { Context } from './context';
-import type { Action, Instruction, Method } from './instructions';
+import type { Action, Estimate, Instruction, Method } from './instructions';
 import { MethodExpansion } from './instructions';
 import type {
 	ActionTaskProps,
@@ -53,6 +53,11 @@ interface TaskSpec<
 		s: Lens<TState, TPath>,
 		ctx: ContextWithSystem<TState, TPath, TOp>,
 	) => boolean;
+
+	/**
+	 * Optional cost estimate for this task
+	 */
+	readonly estimate?: Estimate;
 }
 
 /**
@@ -286,6 +291,7 @@ function ground<
 			_tag: 'action' as const,
 			description,
 			condition,
+			estimate: task.estimate,
 			effect,
 			toJSON() {
 				return {
@@ -312,6 +318,7 @@ function ground<
 		_tag: 'method' as const,
 		description,
 		condition,
+		estimate: task.estimate,
 		expansion,
 		toJSON() {
 			return {
