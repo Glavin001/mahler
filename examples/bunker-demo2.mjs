@@ -41,16 +41,13 @@ const initial = {
 
   // Inventory
   hasKey: false,
-  // hasC4: false,
-  hasC4: true,
+  hasC4: false,
   hasStar: false,
 
   // Environment
   storageUnlocked: false,
   c4Placed: false,
-  // c4Placed: true,
   bunkerBreached: false,
-  // bunkerBreached: true,
 };
 
 // Undirected edges + state gates
@@ -63,7 +60,6 @@ const RAW_EDGES = [
   [N.STORAGE_INT,  N.C4_TABLE,     () => true],
   [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => s.bunkerBreached === true],
 	[N.BUNKER_DOOR,  N.SAFE,         () => true],
-  // [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => true],
   [N.BUNKER_INT,   N.STAR,         () => true],
 ];
 
@@ -177,7 +173,7 @@ const UnlockStorage = Task.from({
   effect: (state) => {
     state._.storageUnlocked = true;
   },
-  description: 'Unlock storage door',
+  description: 'Unlock storage door with key',
 });
 
 const PickUpC4 = Task.from({
@@ -242,6 +238,7 @@ const GoTo = Task.of().from({
 
 const AcquireKey = Task.from({
   condition: (state) => !state.hasKey,
+	expansion: 'sequential',
   method: (_state, ctx) => [
     // IMPORTANT: use Move({ target: <location> }) now
     GoTo({ target: N.TABLE }),
@@ -252,6 +249,8 @@ const AcquireKey = Task.from({
 
 const AcquireC4 = Task.from({
   condition: (state) => !state.hasC4,
+	expansion: 'sequential',
+	// condition: (state, { target }) => !state.hasC4 && target?.hasC4 === true,
   method: (state, ctx) => {
     const steps = [GoTo({ target: N.STORAGE_DOOR })];
     if (!state.storageUnlocked) {
@@ -287,7 +286,6 @@ const BreachBunker = Task.from({
 });
 
 const GetStar = Task.from({
-  // condition: (state) => !state.hasStar,
 	condition: (state, { target }) => !state.hasStar && target?.hasStar === true,
 	expansion: 'sequential',
   method: (_state, ctx) => [
@@ -316,15 +314,15 @@ const tasks = [
   // Methods first to guide the planner
   GoTo,
   // MissionCollectStar,
-  // AcquireKey,
+  AcquireKey,
   AcquireC4,
   BreachBunker,
   GetStar,
 
   // Primitive actions
   Move,
-  // PickUpKey,
-  // UnlockStorage,
+  PickUpKey,
+  UnlockStorage,
   PickUpC4,
   PlaceC4,
   Detonate,
@@ -332,11 +330,14 @@ const tasks = [
 ];
 
 // Goal: obtain the star
-// const goal = { hasStar: true };
+const goal = { hasStar: true };
 // const goal = { agentAt: N.BUNKER_DOOR };
 // const goal = { bunkerBreached: true };
-const goal = { agentAt: N.BUNKER_INT };
+// const goal = { agentAt: N.BUNKER_INT };
+// const goal = { agentAt: N.C4_TABLE };
+// const goal = { hasC4: true };
 // const goal = { agentAt: N.STAR };
+// const goal = { hasKey: true };
 
 const trace = mermaid();
 const planner = Planner.from({
@@ -356,6 +357,7 @@ console.log('\n--- PLAN RESULT (MERMAID) ---');
 console.log(trace.render());
 console.log('\n---');
 
+/*
 console.log('\n--- AGENT ---');
 const agent = Agent.from({
   initial,
@@ -372,3 +374,4 @@ console.log('Success:', result.success);
 console.log('Final state:', result.state);
 
 console.log('\n---');
+*/
