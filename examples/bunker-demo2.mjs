@@ -8,7 +8,7 @@
 
 import { Agent, Task } from 'mahler';
 import { Planner } from 'mahler/planner';
-import { stringify } from 'mahler/testing';
+import { stringify, mermaid } from 'mahler/testing';
 import { readableTrace } from 'mahler/utils';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,32 @@ const N = Object.freeze({
   SAFE: 'safe_spot',            // safe distance for detonation
 });
 
+// ---------------------------------------------------------------------------
+// Initial state
+// ---------------------------------------------------------------------------
+
+const initial = {
+  agentAt: N.COURTYARD,
+
+  // World facts
+  keyOnTable: true,      // informative; we gate pickup by hasKey anyway
+  c4Available: true,     // informative
+  starPresent: true,
+
+  // Inventory
+  hasKey: false,
+  // hasC4: false,
+  hasC4: true,
+  hasStar: false,
+
+  // Environment
+  storageUnlocked: false,
+  c4Placed: false,
+  // c4Placed: true,
+  bunkerBreached: false,
+  // bunkerBreached: true,
+};
+
 // Undirected edges + state gates
 const RAW_EDGES = [
   [N.COURTYARD,    N.TABLE,        () => true],
@@ -35,8 +61,9 @@ const RAW_EDGES = [
   [N.COURTYARD,    N.SAFE,         () => true],
   [N.STORAGE_DOOR, N.STORAGE_INT,  (s) => s.storageUnlocked === true],
   [N.STORAGE_INT,  N.C4_TABLE,     () => true],
-  // [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => s.bunkerBreached === true],
-  [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => true],
+  [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => s.bunkerBreached === true],
+	[N.BUNKER_DOOR,  N.SAFE,         () => true],
+  // [N.BUNKER_DOOR,  N.BUNKER_INT,   (s) => true],
   [N.BUNKER_INT,   N.STAR,         () => true],
 ];
 
@@ -84,28 +111,33 @@ function isImmediatellyReachable(state, from, to) {
 	return neighbors(state, from).includes(to);
 }
 
-// ---------------------------------------------------------------------------
-// Initial state
-// ---------------------------------------------------------------------------
-
-const initial = {
-  agentAt: N.COURTYARD,
-
-  // World facts
-  keyOnTable: true,      // informative; we gate pickup by hasKey anyway
-  c4Available: true,     // informative
-  starPresent: true,
-
-  // Inventory
-  hasKey: false,
-  hasC4: false,
-  hasStar: false,
-
-  // Environment
-  storageUnlocked: false,
-  c4Placed: false,
-  bunkerBreached: false,
-};
+// Find a path as a sequence of neighbor-to-neighbor locations (inclusive)
+function findPath(state, from, to) {
+  if (from === to) return [from];
+  const seen = new Set([from]);
+  const q = [from];
+  const prev = new Map();
+  while (q.length) {
+    const cur = q.shift();
+    for (const n of neighbors(state, cur)) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      prev.set(n, cur);
+      if (n === to) {
+        const path = [to];
+        let p = prev.get(to);
+        while (p !== undefined) {
+          path.push(p);
+          p = prev.get(p);
+        }
+        path.reverse();
+        return path;
+      }
+      q.push(n);
+    }
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Primitive actions (effects only; we keep them side‑effect free here)
@@ -117,8 +149,11 @@ const initial = {
  */
 const Move = Task.of().from({
   lens: '/agentAt',
-  condition: (agentAt, { target, system }) =>
-    agentAt !== target && isReachable(system, agentAt, target),
+  condition: (agentAt, { target, system }) => {
+    const res = agentAt !== target && isImmediatellyReachable(system, agentAt, target)
+		// console.log('Move condition', { agentAt, target, res })
+		return res
+	},
   effect: (agentAt, { target }) => {
     agentAt._ = target; // teleport since path is traversable
   },
@@ -177,7 +212,7 @@ const Detonate = Task.from({
 
 const PickUpStar = Task.from({
   condition: (state) =>
-    !state.hasStar && state.starPresent && state.bunkerBreached && state.agentAt === N.STAR,
+    !state.hasStar && state.starPresent && state.agentAt === N.STAR,
   effect: (state) => {
     state._.hasStar = true;
     state._.starPresent = false;
@@ -189,11 +224,27 @@ const PickUpStar = Task.from({
 // Methods (compound tasks)
 // ---------------------------------------------------------------------------
 
+const GoTo = Task.of().from({
+  lens: '/agentAt',
+  condition: (agentAt, { target }) => agentAt !== target,
+	// Ensure each Move updates 'agentAt' before the next Move
+	expansion: 'sequential',
+  method: (agentAt, { system, target }) => {
+    const path = findPath(system, agentAt, target);
+    if (!path || path.length < 2) return [];
+    // Create a Move for each immediate step along the path
+    return path.slice(1).map((step) => {
+			return Move({ target: step });
+		});
+  },
+  description: ({ target }) => `Go to ${target}`,
+});
+
 const AcquireKey = Task.from({
   condition: (state) => !state.hasKey,
   method: (_state, ctx) => [
     // IMPORTANT: use Move({ target: <location> }) now
-    Move({ target: N.TABLE }),
+    GoTo({ target: N.TABLE }),
     PickUpKey({ target: ctx.target }),
   ],
   description: 'Acquire key',
@@ -202,12 +253,12 @@ const AcquireKey = Task.from({
 const AcquireC4 = Task.from({
   condition: (state) => !state.hasC4,
   method: (state, ctx) => {
-    const steps = [Move({ target: N.STORAGE_DOOR })];
+    const steps = [GoTo({ target: N.STORAGE_DOOR })];
     if (!state.storageUnlocked) {
       steps.push(UnlockStorage({ target: ctx.target }));
     }
     steps.push(
-      Move({ target: N.C4_TABLE }),
+      GoTo({ target: N.C4_TABLE }),
       PickUpC4({ target: ctx.target }),
     );
     return steps;
@@ -217,19 +268,30 @@ const AcquireC4 = Task.from({
 
 const BreachBunker = Task.from({
   condition: (state) => !state.bunkerBreached,
-  method: (_state, ctx) => [
-    Move({ target: N.BUNKER_DOOR }),
-    PlaceC4({ target: ctx.target }),
-    Move({ target: N.SAFE }),    // walk away to safe distance
-    Detonate({ target: ctx.target }),
-  ],
+	expansion: 'sequential',
+  method: (state, ctx) => {
+		const steps = [];
+		if (!state.c4Placed) {
+			steps.push(
+				GoTo({ target: N.BUNKER_DOOR }),
+				PlaceC4({ target: ctx.target })
+			);
+    }
+    steps.push(
+      GoTo({ target: N.SAFE }),    // walk away to safe distance
+      Detonate({ target: ctx.target }),
+    );
+    return steps;
+  },
   description: 'Breach bunker',
 });
 
 const GetStar = Task.from({
-  condition: (state) => !state.hasStar,
+  // condition: (state) => !state.hasStar,
+	condition: (state, { target }) => !state.hasStar && target?.hasStar === true,
+	expansion: 'sequential',
   method: (_state, ctx) => [
-    Move({ target: N.STAR }),
+    GoTo({ target: N.STAR }),
     PickUpStar({ target: ctx.target }),
   ],
   description: 'Collect star',
@@ -252,35 +314,46 @@ const MissionCollectStar = Task.from({
 
 const tasks = [
   // Methods first to guide the planner
+  GoTo,
   // MissionCollectStar,
   // AcquireKey,
-  // AcquireC4,
-  // BreachBunker,
-  // GetStar,
+  AcquireC4,
+  BreachBunker,
+  GetStar,
 
   // Primitive actions
   Move,
   // PickUpKey,
   // UnlockStorage,
-  // PickUpC4,
-  // PlaceC4,
-  // Detonate,
+  PickUpC4,
+  PlaceC4,
+  Detonate,
   PickUpStar,
 ];
 
 // Goal: obtain the star
 // const goal = { hasStar: true };
-const goal = { agentAt: N.STAR };
+// const goal = { agentAt: N.BUNKER_DOOR };
+// const goal = { bunkerBreached: true };
+const goal = { agentAt: N.BUNKER_INT };
+// const goal = { agentAt: N.STAR };
 
+const trace = mermaid();
 const planner = Planner.from({
 	tasks,
-	config: { trace: readableTrace(console) },
+	config: {
+		// trace: readableTrace(console)
+		trace,
+	},
 });
 
 const planResult = planner.findPlan(initial, goal);
 // planResult is similar to what agent.wait() would eventually return, but is synchronous and only plans (does not execute).
 console.log('\n--- PLAN RESULT ---');
 console.log(stringify(planResult));
+
+console.log('\n--- PLAN RESULT (MERMAID) ---');
+console.log(trace.render());
 console.log('\n---');
 
 console.log('\n--- AGENT ---');
