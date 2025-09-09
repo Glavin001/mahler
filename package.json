@@ -67,6 +67,7 @@
     "dockerode": "^3.3.5",
     "husky": "^4.2.5",
     "lint-staged": "^11.0.0",
+    "logging": "^4.2.0",
     "memoizee": "^0.4.15",
     "mocha": "^10.6.0",
     "rimraf": "^6.0.1",
