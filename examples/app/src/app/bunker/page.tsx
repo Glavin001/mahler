@@ -5,6 +5,9 @@ import * as THREE from 'three'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Agent, Task } from 'mahler'
 import { CameraControls } from '@react-three/drei'
+import { Geometry, Base, Subtraction, Addition } from '@react-three/csg'
+
+const AGENT_INSIDE_BUILDING_OPACITY = 0.5
 
 type Vec3 = [number, number, number]
 
@@ -29,20 +32,23 @@ type BuildingConfig = {
   size: [number, number, number] // [width, height, depth]
   doorFace: 'north' | 'south' | 'east' | 'west'
   doorOffset?: number // distance from building edge for door positioning
+  doorSize: [number, number] // [width, height] of the door
 }
 
 const BUILDINGS: Record<string, BuildingConfig> = {
   STORAGE: {
     center: [-10, 0, 8],
-    size: [5, 3.5, 3.5],
+    size: [6, 3.5, 4.5],
     doorFace: 'east',
-    doorOffset: 2 // meters from building edge
+    doorOffset: 1.5, // meters from building edge
+    doorSize: [1.2, 1.6] // [width, height] - standard door
   },
   BUNKER: {
     center: [15, 0, 0],
-    size: [5.5, 4, 4],
+    size: [7, 5, 7],
     doorFace: 'west',
-    doorOffset: 3 // meters from building edge
+    doorOffset: 1.5, // meters from building edge
+    doorSize: [1.8, 2.4] // [width, height] - larger bunker door
   }
 }
 
@@ -96,13 +102,17 @@ const NODE_POS: Record<NodeId, Vec3> = {
   // Fixed outdoor positions
   [N.COURTYARD]: [0, 0, 0],
   [N.TABLE]: [-10, 0, 0],
-  [N.SAFE]: [0, 0, -10],
+//   [N.SAFE]: [0, 0, -10],
+  [N.SAFE]: (() => {
+    const pos = getBuildingDoorPosition(BUILDINGS.BUNKER)
+    return [pos[0] - 5, pos[1], pos[2]]
+  })(),
 
   // Storage building positions (mathematically calculated)
   // Storage building spans: [-12.5 to -7.5, 0, 6.25 to 9.75]
   [N.STORAGE_DOOR]: getBuildingDoorPosition(BUILDINGS.STORAGE), // [-5.5, 0, 8] (east side + 2m offset)
   [N.STORAGE_INT]: getBuildingInteriorPosition(BUILDINGS.STORAGE), // [-10, 0, 8] (center)
-  [N.C4_TABLE]: getBuildingInteriorPosition(BUILDINGS.STORAGE, [-2, 0, 0]), // [-12, 0, 8] (inside, left of center)
+  [N.C4_TABLE]: getBuildingInteriorPosition(BUILDINGS.STORAGE, [-1, 0, 0]), // [-12, 0, 8] (inside, left of center)
 
   // Bunker building positions (mathematically calculated)
   // Bunker building spans: [12.25 to 17.75, 0, -2 to 2]
@@ -147,6 +157,7 @@ const RAW_EDGES: Edge[] = [
   [N.TABLE, N.STORAGE_DOOR, () => true],
   [N.STORAGE_DOOR, N.STORAGE_INT, (s) => s.storageUnlocked === true],
   [N.STORAGE_INT, N.C4_TABLE, () => true],
+  [N.STORAGE_DOOR, N.BUNKER_DOOR, () => true],
   [N.BUNKER_DOOR, N.BUNKER_INT, (s) => s.bunkerBreached === true],
   [N.BUNKER_DOOR, N.SAFE, () => true],
   [N.BUNKER_INT, N.STAR, () => true],
@@ -213,13 +224,15 @@ function BoxMarker({ position, color = '#34495e', label }: { position: Vec3; col
   return (
     <group position={position}>
       <mesh castShadow receiveShadow>
-        <boxGeometry args={[1.2, 0.4, 1.2]} />
+        <boxGeometry args={[2, 0.4, 2]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <mesh position={[0, 0.35, 0]}>
-        <boxGeometry args={[1.2, 0.02, 1.2]} />
+      {/*
+	  <mesh position={[0, 0.35, 0]}>
+        <boxGeometry args={[2, 0.02, 2]} />
         <meshStandardMaterial color="#95a5a6" />
       </mesh>
+	  */}
       <LabelSprite position={[0, 0.9, 0]} text={label} />
     </group>
   )
@@ -473,54 +486,173 @@ function Building({
   color = '#4b5563',
   label,
   doorFace,
-  doorSize = [1, 1.6] as [number, number],
+  doorSize,
   doorColor = '#a78bfa',
   showDoor = true,
   opacity = 1,
+  debug = false,
 }: {
   center: Vec3
   size: [number, number, number]
   color?: string
   label: string
   doorFace: Face
-  doorSize?: [number, number]
+  doorSize: [number, number]
   doorColor?: string
   showDoor?: boolean
   opacity?: number
+  debug?: boolean
 }) {
   const [dx, dy, dz] = size
-  const eps = 0.02
+  const wallThickness = 0.2
+  const doorThickness = 0.15
 
-  function doorTransform(face: Face): { pos: Vec3; rotY: number } {
-    // Local to building center; y is placed so door rests on ground
-    const y = -dy / 2 + doorSize[1] / 2
+  function getDoorGeometry(face: Face): { position: Vec3; rotation: [number, number, number] } {
+    const surfaceOffset = wallThickness / 2 + 0.01
+    const y = -dy / 2 + doorSize[1] / 2 // Door bottom aligns with building bottom
+
     switch (face) {
       case 'east':
-        return { pos: [dx / 2 + eps, y, 0], rotY: Math.PI / 2 }
+        return {
+          position: [dx / 2 + surfaceOffset, y, 0],
+          rotation: [0, Math.PI / 2, 0],
+        }
       case 'west':
-        return { pos: [-dx / 2 - eps, y, 0], rotY: Math.PI / 2 }
+        return {
+          position: [-dx / 2 - surfaceOffset, y, 0],
+          rotation: [0, Math.PI / 2, 0],
+        }
       case 'south':
-        return { pos: [0, y, dz / 2 + eps], rotY: 0 }
+        return {
+          position: [0, y, dz / 2 + surfaceOffset],
+          rotation: [0, 0, 0],
+        }
       case 'north':
       default:
-        return { pos: [0, y, -dz / 2 - eps], rotY: 0 }
+        return {
+          position: [0, y, -dz / 2 - surfaceOffset],
+          rotation: [0, 0, 0],
+        }
     }
   }
 
-  const { pos: doorPosLocal, rotY } = doorTransform(doorFace)
+  const doorGeom = getDoorGeometry(doorFace)
+  const isOpen = !showDoor
+
+  // Debug colors for each wall
+  const debugColors = {
+    floor: '#ff9500',    // orange
+    roof: '#8e44ad',     // purple
+    north: '#e74c3c',    // red
+    south: '#3498db',    // blue
+    east: '#2ecc71',     // green
+    west: '#f1c40f',     // yellow
+  }
+  const floorColor = debugColors.floor
 
   return (
     <group position={[center[0], dy / 2, center[2]]}>
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={[dx, dy, dz]} />
-        <meshStandardMaterial color={color} transparent opacity={opacity} />
+      {/* Floor */}
+      <mesh position={[0, -dy / 2, 0]} castShadow receiveShadow>
+        <boxGeometry args={[dx, wallThickness, dz]} />
+        <meshStandardMaterial color={debug ? debugColors.floor : floorColor} transparent opacity={opacity} />
       </mesh>
 
+      {/* Roof */}
+      <mesh position={[0, dy / 2, 0]} castShadow receiveShadow>
+        <boxGeometry args={[dx, wallThickness, dz]} />
+        <meshStandardMaterial color={debug ? debugColors.roof : color} transparent opacity={opacity} />
+      </mesh>
+
+      {/* North Wall - RED - full width */}
+      <mesh castShadow receiveShadow position={[0, 0, -(dz / 2 - wallThickness / 2)]}>
+        <Geometry>
+          <Base>
+            <boxGeometry args={[dx, dy, wallThickness]} />
+          </Base>
+          {/* Cut door if this is the door wall and door is open */}
+          {doorFace === 'north' && isOpen && (
+            <Subtraction position={[0, -dy / 2 + doorSize[1] / 2, 0]}>
+              <boxGeometry args={[doorSize[0], doorSize[1], wallThickness + 0.1]} />
+            </Subtraction>
+          )}
+        </Geometry>
+        <meshStandardMaterial color={debug ? debugColors.north : color} transparent opacity={opacity} />
+      </mesh>
+
+      {/* South Wall - BLUE - full width */}
+      <mesh castShadow receiveShadow position={[0, 0, dz / 2 - wallThickness / 2]}>
+        <Geometry>
+          <Base>
+            <boxGeometry args={[dx, dy, wallThickness]} />
+          </Base>
+          {/* Cut door if this is the door wall and door is open */}
+          {doorFace === 'south' && isOpen && (
+            <Subtraction position={[0, -dy / 2 + doorSize[1] / 2, 0]}>
+              <boxGeometry args={[doorSize[0], doorSize[1], wallThickness + 0.1]} />
+            </Subtraction>
+          )}
+        </Geometry>
+        <meshStandardMaterial color={debug ? debugColors.south : color} transparent opacity={opacity} />
+      </mesh>
+
+      {/* East Wall - GREEN - shortened to fit between north/south walls */}
+      <mesh castShadow receiveShadow position={[dx / 2 - wallThickness / 2, 0, 0]}>
+        <Geometry>
+          <Base>
+            <boxGeometry args={[wallThickness, dy, dz - wallThickness]} />
+          </Base>
+          {/* Cut door if this is the door wall and door is open */}
+          {doorFace === 'east' && isOpen && (
+            <Subtraction position={[0, -dy / 2 + doorSize[1] / 2, 0]}>
+              <boxGeometry args={[wallThickness + 0.1, doorSize[1], doorSize[0]]} />
+            </Subtraction>
+          )}
+        </Geometry>
+        <meshStandardMaterial color={debug ? debugColors.east : color} transparent opacity={opacity} />
+      </mesh>
+
+      {/* West Wall - YELLOW - shortened to fit between north/south walls */}
+      <mesh castShadow receiveShadow position={[-(dx / 2 - wallThickness / 2), 0, 0]}>
+        <Geometry>
+          <Base>
+            <boxGeometry args={[wallThickness, dy, dz - wallThickness]} />
+          </Base>
+          {/* Cut door if this is the door wall and door is open */}
+          {doorFace === 'west' && isOpen && (
+            <Subtraction position={[0, -dy / 2 + doorSize[1] / 2, 0]}>
+              <boxGeometry args={[wallThickness + 0.1, doorSize[1], doorSize[0]]} />
+            </Subtraction>
+          )}
+        </Geometry>
+        <meshStandardMaterial color={debug ? debugColors.west : color} transparent opacity={opacity} />
+      </mesh>
+
+      {/* When door is closed, show contrasting door surface */}
       {showDoor && (
-        <mesh position={doorPosLocal} rotation={[0, rotY, 0]} castShadow>
-          <boxGeometry args={[doorSize[0], doorSize[1], 0.08]} />
-          <meshStandardMaterial color={doorColor} />
+        <mesh position={doorGeom.position} rotation={doorGeom.rotation} castShadow>
+          <boxGeometry args={[doorSize[0], doorSize[1], doorThickness]} />
+          <meshStandardMaterial
+            color={doorColor}
+            metalness={0.3}
+            roughness={0.7}
+          />
         </mesh>
+      )}
+
+      {/* Door frame for visual enhancement - only show when door is closed */}
+      {showDoor && (
+        <group position={doorGeom.position} rotation={doorGeom.rotation}>
+          {/* Door frame outline */}
+          <mesh castShadow>
+            <boxGeometry args={[doorSize[0] + 0.1, doorSize[1] + 0.1, doorThickness * 0.5]} />
+            <meshStandardMaterial
+              color="#2d3748"
+              metalness={0.5}
+              roughness={0.3}
+            />
+          </mesh>
+        </group>
       )}
 
       <LabelSprite position={[0, dy / 2 + 0.6, 0]} text={label} />
@@ -595,6 +727,7 @@ export default function BunkerPage() {
     moveTo: (n: NodeId) => Promise<void>;
     explodeAt: (n: NodeId) => Promise<void>;
     startPickupAnimation: (fromPos: Vec3, type: 'key' | 'c4' | 'star', color: string) => Promise<void>;
+    startPlacementAnimation: (toPos: Vec3, type: 'key' | 'c4' | 'star', color: string) => Promise<void>;
   } | null>(null)
 
   if (apiRef.current == null) {
@@ -647,6 +780,36 @@ export default function BunkerPage() {
           }, 800)
         })
       },
+      startPlacementAnimation: (toPos: Vec3, type: 'key' | 'c4' | 'star', color: string) => {
+        const animId = `${type}_placement_${performance.now()}`
+        const agentPos = agentPosRef.current
+        const startPos: Vec3 = [agentPos[0], agentPos[1] + 1.2, agentPos[2]]
+
+        return new Promise<void>((resolve) => {
+          setPickupAnimations(prev => ({
+            ...prev,
+            [animId]: {
+              active: true,
+              startPos,
+              endPos: toPos,
+              startTime: performance.now(),
+              duration: 600,
+              type,
+              color
+            }
+          }))
+
+          // Clean up animation after completion
+          setTimeout(() => {
+            setPickupAnimations(prev => {
+              const newAnims = { ...prev }
+              delete newAnims[animId]
+              return newAnims
+            })
+            resolve()
+          }, 600)
+        })
+      },
     }
   }
 
@@ -672,9 +835,10 @@ export default function BunkerPage() {
         state._.keyOnTable = false
       },
       action: async (state) => {
-        await apiRef.current!.startPickupAnimation(NODE_POS[N.TABLE], 'key', '#fbbf24')
-        state._.hasKey = true
+        // Hide original key immediately when animation starts
         state._.keyOnTable = false
+        await apiRef.current!.startPickupAnimation([NODE_POS[N.TABLE][0], NODE_POS[N.TABLE][1] + 0.6, NODE_POS[N.TABLE][2]], 'key', '#fbbf24')
+        state._.hasKey = true
       },
       description: 'Pick up key',
     })
@@ -698,9 +862,10 @@ export default function BunkerPage() {
         state._.c4Available = false
       },
       action: async (state) => {
-        await apiRef.current!.startPickupAnimation(NODE_POS[N.C4_TABLE], 'c4', '#ef4444')
-        state._.hasC4 = true
+        // Hide original C4 immediately when animation starts
         state._.c4Available = false
+        await apiRef.current!.startPickupAnimation([NODE_POS[N.C4_TABLE][0], NODE_POS[N.C4_TABLE][1] + 0.6, NODE_POS[N.C4_TABLE][2]], 'c4', '#ef4444')
+        state._.hasC4 = true
       },
       description: 'Pick up C4',
     })
@@ -712,8 +877,12 @@ export default function BunkerPage() {
         state._.c4Placed = true
       },
       action: async (state) => {
-        await new Promise((r) => setTimeout(r, 200))
+        // Remove from inventory immediately
         state._.hasC4 = false
+        // Animate C4 being placed down from agent to door position
+        const doorPos: Vec3 = [NODE_POS[N.BUNKER_DOOR][0], NODE_POS[N.BUNKER_DOOR][1] + 0.4, NODE_POS[N.BUNKER_DOOR][2]]
+        await apiRef.current!.startPlacementAnimation(doorPos, 'c4', '#ef4444')
+        // Show placed C4
         state._.c4Placed = true
       },
       description: 'Place C4 on bunker',
@@ -740,9 +909,10 @@ export default function BunkerPage() {
         state._.starPresent = false
       },
       action: async (state) => {
-        await apiRef.current!.startPickupAnimation(NODE_POS[N.STAR], 'star', '#fde68a')
-        state._.hasStar = true
+        // Hide original star immediately when animation starts
         state._.starPresent = false
+        await apiRef.current!.startPickupAnimation([NODE_POS[N.STAR][0], NODE_POS[N.STAR][1] + 0.5, NODE_POS[N.STAR][2]], 'star', '#fde68a')
+        state._.hasStar = true
       },
       description: 'Pick up star',
     })
@@ -865,9 +1035,11 @@ export default function BunkerPage() {
               color="#3f6212"
               label="Storage"
               doorFace={BUILDINGS.STORAGE.doorFace}
+              doorSize={BUILDINGS.STORAGE.doorSize}
               doorColor={world.storageUnlocked ? '#16a34a' : '#a16207'}
               showDoor={!world.storageUnlocked}
-              opacity={world.agentAt === N.STORAGE_INT || world.agentAt === N.C4_TABLE || world.agentAt === N.STORAGE_DOOR ? 0.3 : 1}
+              opacity={world.agentAt === N.STORAGE_INT || world.agentAt === N.C4_TABLE || world.agentAt === N.STORAGE_DOOR ? AGENT_INSIDE_BUILDING_OPACITY : 1}
+              debug={false}
             />
             {/* Reference markers for pathfinding nodes */}
             <BoxMarker position={NODE_POS[N.STORAGE_DOOR]} color={world.storageUnlocked ? '#16a34a' : '#a16207'} label="Storage Door" />
@@ -880,36 +1052,38 @@ export default function BunkerPage() {
               color="#374151"
               label="Bunker"
               doorFace={BUILDINGS.BUNKER.doorFace}
+              doorSize={BUILDINGS.BUNKER.doorSize}
               doorColor={world.bunkerBreached ? '#16a34a' : '#7c2d12'}
               showDoor={!world.bunkerBreached}
-              opacity={world.agentAt === N.BUNKER_INT || world.agentAt === N.STAR || world.agentAt === N.BUNKER_DOOR ? 0.3 : 1}
+              opacity={world.agentAt === N.BUNKER_INT || world.agentAt === N.STAR || world.agentAt === N.BUNKER_DOOR ? AGENT_INSIDE_BUILDING_OPACITY : 1}
+              debug={false}
             />
             <BoxMarker position={NODE_POS[N.BUNKER_DOOR]} color={world.bunkerBreached ? '#16a34a' : '#7c2d12'} label="Bunker Door" />
 
             <BoxMarker position={NODE_POS[N.STAR]} color="#6b21a8" label="Star" />
-            <BoxMarker position={NODE_POS[N.SAFE]} color="#0ea5e9" label="Safe Spot" />
+            <BoxMarker position={NODE_POS[N.SAFE]} color="#0ea5e9" label="Blast Safe Zone" />
 
             {/* Objects in world */}
             <EnhancedObject
-              position={NODE_POS[N.TABLE]}
+              position={[NODE_POS[N.TABLE][0], NODE_POS[N.TABLE][1] + 0.6, NODE_POS[N.TABLE][2]]}
               color="#fbbf24"
               type="key"
               visible={world.keyOnTable}
             />
             <EnhancedObject
-              position={NODE_POS[N.C4_TABLE]}
+              position={[NODE_POS[N.C4_TABLE][0], NODE_POS[N.C4_TABLE][1] + 0.6, NODE_POS[N.C4_TABLE][2]]}
               color="#ef4444"
               type="c4"
               visible={world.c4Available}
             />
             <SmallSphere
-              position={NODE_POS[N.BUNKER_DOOR]}
+              position={[NODE_POS[N.BUNKER_DOOR][0], NODE_POS[N.BUNKER_DOOR][1] + 0.4, NODE_POS[N.BUNKER_DOOR][2]]}
               color="#ef4444"
               visible={world.c4Placed}
-              size={0.2}
+              size={0.3}
             />
             <EnhancedObject
-              position={NODE_POS[N.STAR]}
+              position={[NODE_POS[N.STAR][0], NODE_POS[N.STAR][1] + 0.5, NODE_POS[N.STAR][2]]}
               color="#fde68a"
               type="star"
               visible={world.starPresent}
