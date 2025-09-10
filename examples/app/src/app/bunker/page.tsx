@@ -213,6 +213,7 @@ function Building({
   doorSize = [1, 1.6] as [number, number],
   doorColor = '#a78bfa',
   showDoor = true,
+  opacity = 1,
 }: {
   center: Vec3
   size: [number, number, number]
@@ -222,6 +223,7 @@ function Building({
   doorSize?: [number, number]
   doorColor?: string
   showDoor?: boolean
+  opacity?: number
 }) {
   const [dx, dy, dz] = size
   const eps = 0.02
@@ -248,7 +250,7 @@ function Building({
     <group position={[center[0], dy / 2, center[2]]}>
       <mesh castShadow receiveShadow>
         <boxGeometry args={[dx, dy, dz]} />
-        <meshStandardMaterial color={color} />
+        <meshStandardMaterial color={color} transparent opacity={opacity} />
       </mesh>
 
       {showDoor && (
@@ -548,12 +550,13 @@ export default function BunkerPage() {
             {/* Storage building with door at STORAGE_DOOR (north face) */}
             <Building
               center={NODE_POS[N.STORAGE_INT]}
-              size={[3, 2.2, 2.2]}
+              size={[5, 3.5, 3.5]}
               color="#3f6212"
               label="Storage"
               doorFace="east"
               doorColor={world.storageUnlocked ? '#16a34a' : '#a16207'}
               showDoor={!world.storageUnlocked}
+              opacity={world.agentAt === N.STORAGE_INT || world.agentAt === N.C4_TABLE ? 0.3 : 1}
             />
             {/* Reference markers for pathfinding nodes */}
             <BoxMarker position={NODE_POS[N.STORAGE_DOOR]} color={world.storageUnlocked ? '#16a34a' : '#a16207'} label="Storage Door" />
@@ -562,12 +565,13 @@ export default function BunkerPage() {
             {/* Bunker building with door at BUNKER_DOOR (west face) */}
             <Building
               center={NODE_POS[N.BUNKER_INT]}
-              size={[3.4, 2.6, 2.6]}
+              size={[5.5, 4, 4]}
               color="#374151"
               label="Bunker"
               doorFace="west"
               doorColor={world.bunkerBreached ? '#16a34a' : '#7c2d12'}
               showDoor={!world.bunkerBreached}
+              opacity={world.agentAt === N.BUNKER_INT || world.agentAt === N.STAR ? 0.3 : 1}
             />
             <BoxMarker position={NODE_POS[N.BUNKER_DOOR]} color={world.bunkerBreached ? '#16a34a' : '#7c2d12'} label="Bunker Door" />
 
@@ -598,7 +602,14 @@ export default function BunkerPage() {
         </div>
 
         <div className="mt-4 text-gray-300">
-          <div>Inventory: {world.hasKey ? 'Key ' : ''}{world.hasC4 ? 'C4 ' : ''}{world.hasStar ? 'Star' : ''}</div>
+          <div>
+            Inventory:{" "}
+            <span>Key: {world.hasKey ? "true" : "false"}</span>
+            {" | "}
+            <span>C4: {world.hasC4 ? "true" : "false"}</span>
+            {" | "}
+            <span>Star: {world.hasStar ? "true" : "false"}</span>
+          </div>
           <a href="/" className="inline-block mt-3 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">← Back to Home</a>
         </div>
       </div>
