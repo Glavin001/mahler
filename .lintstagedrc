@@ -1,5 +1,8 @@
 {
-	"*.ts": [
+	"lib/**/*.ts": [
 		"balena-lint --typescript --fix"
 	],
+	"tests/**/*.ts": [
+		"balena-lint --typescript --fix"
+	]
 }
