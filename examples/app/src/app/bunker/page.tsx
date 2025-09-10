@@ -23,17 +23,92 @@ const N = Object.freeze({
 
 type NodeId = (typeof N)[keyof typeof N]
 
-// Grid positions for each node (meters)
+// Building configuration
+type BuildingConfig = {
+  center: Vec3
+  size: [number, number, number] // [width, height, depth]
+  doorFace: 'north' | 'south' | 'east' | 'west'
+  doorOffset?: number // distance from building edge for door positioning
+}
+
+const BUILDINGS: Record<string, BuildingConfig> = {
+  STORAGE: {
+    center: [-10, 0, 8],
+    size: [5, 3.5, 3.5],
+    doorFace: 'east',
+    doorOffset: 2 // meters from building edge
+  },
+  BUNKER: {
+    center: [15, 0, 0],
+    size: [5.5, 4, 4],
+    doorFace: 'west',
+    doorOffset: 3 // meters from building edge
+  }
+}
+
+// Helper functions for building geometry calculations
+function getBuildingInteriorPosition(building: BuildingConfig, offsetFromCenter: Vec3 = [0, 0, 0]): Vec3 {
+  const [centerX, centerY, centerZ] = building.center
+  const [offsetX, offsetY, offsetZ] = offsetFromCenter
+  return [centerX + offsetX, centerY + offsetY, centerZ + offsetZ]
+}
+
+function getBuildingDoorPosition(building: BuildingConfig): Vec3 {
+  const [centerX, centerY, centerZ] = building.center
+  const [width, height, depth] = building.size
+  const offset = building.doorOffset || 0
+
+  switch (building.doorFace) {
+    case 'east':
+      return [centerX + width / 2 + offset, centerY, centerZ]
+    case 'west':
+      return [centerX - width / 2 - offset, centerY, centerZ]
+    case 'south':
+      return [centerX, centerY, centerZ + depth / 2 + offset]
+    case 'north':
+      return [centerX, centerY, centerZ - depth / 2 - offset]
+  }
+}
+
+// Additional helper to get building bounds for validation
+function getBuildingBounds(building: BuildingConfig): { min: Vec3; max: Vec3 } {
+  const [centerX, centerY, centerZ] = building.center
+  const [width, height, depth] = building.size
+  return {
+    min: [centerX - width / 2, centerY - height / 2, centerZ - depth / 2],
+    max: [centerX + width / 2, centerY + height / 2, centerZ + depth / 2]
+  }
+}
+
+// Helper to check if a position is inside a building
+function isPositionInsideBuilding(position: Vec3, building: BuildingConfig): boolean {
+  const bounds = getBuildingBounds(building)
+  const [x, y, z] = position
+  return (
+    x >= bounds.min[0] && x <= bounds.max[0] &&
+    y >= bounds.min[1] && y <= bounds.max[1] &&
+    z >= bounds.min[2] && z <= bounds.max[2]
+  )
+}
+
+// Calculated positions for each node
 const NODE_POS: Record<NodeId, Vec3> = {
+  // Fixed outdoor positions
   [N.COURTYARD]: [0, 0, 0],
-  [N.TABLE]: [-4, 0, 0],
-  [N.STORAGE_DOOR]: [-2, 0, 3],
-  [N.STORAGE_INT]: [-4, 0, 3],
-  [N.C4_TABLE]: [-6, 0, 3],
-  [N.BUNKER_DOOR]: [4, 0, 0],
-  [N.BUNKER_INT]: [6, 0, 0],
-  [N.STAR]: [7.5, 0, 0],
-  [N.SAFE]: [0, 0, -4],
+  [N.TABLE]: [-10, 0, 0],
+  [N.SAFE]: [0, 0, -10],
+
+  // Storage building positions (mathematically calculated)
+  // Storage building spans: [-12.5 to -7.5, 0, 6.25 to 9.75]
+  [N.STORAGE_DOOR]: getBuildingDoorPosition(BUILDINGS.STORAGE), // [-5.5, 0, 8] (east side + 2m offset)
+  [N.STORAGE_INT]: getBuildingInteriorPosition(BUILDINGS.STORAGE), // [-10, 0, 8] (center)
+  [N.C4_TABLE]: getBuildingInteriorPosition(BUILDINGS.STORAGE, [-2, 0, 0]), // [-12, 0, 8] (inside, left of center)
+
+  // Bunker building positions (mathematically calculated)
+  // Bunker building spans: [12.25 to 17.75, 0, -2 to 2]
+  [N.BUNKER_DOOR]: getBuildingDoorPosition(BUILDINGS.BUNKER), // [9.25, 0, 0] (west side - 3m offset)
+  [N.BUNKER_INT]: getBuildingInteriorPosition(BUILDINGS.BUNKER), // [15, 0, 0] (center)
+  [N.STAR]: getBuildingInteriorPosition(BUILDINGS.BUNKER, [2, 0, 0]), // [17, 0, 0] (inside, right of center)
 }
 
 // Adjacency and gates
@@ -69,6 +144,7 @@ const RAW_EDGES: Edge[] = [
   [N.COURTYARD, N.STORAGE_DOOR, () => true],
   [N.COURTYARD, N.BUNKER_DOOR, () => true],
   [N.COURTYARD, N.SAFE, () => true],
+  [N.TABLE, N.STORAGE_DOOR, () => true],
   [N.STORAGE_DOOR, N.STORAGE_INT, (s) => s.storageUnlocked === true],
   [N.STORAGE_INT, N.C4_TABLE, () => true],
   [N.BUNKER_DOOR, N.BUNKER_INT, (s) => s.bunkerBreached === true],
@@ -123,11 +199,11 @@ function findPath(state: WorldState, from: NodeId, to: NodeId): NodeId[] | null 
   return null
 }
 
-// Simple ground plane
+// Simple ground plane - expanded for larger space
 function Ground() {
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[30, 30]} />
+      <planeGeometry args={[60, 60]} />
       <meshStandardMaterial color="#1f2937" />
     </mesh>
   )
@@ -149,13 +225,200 @@ function BoxMarker({ position, color = '#34495e', label }: { position: Vec3; col
   )
 }
 
-function SmallSphere({ position, color = 'gold', visible = true }: { position: Vec3; color?: string; visible?: boolean }) {
+function SmallSphere({ position, color = 'gold', visible = true, size = 0.18 }: { position: Vec3; color?: string; visible?: boolean; size?: number }) {
   if (!visible) return null
   return (
     <mesh position={position} castShadow>
-      <sphereGeometry args={[0.18, 16, 16]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.2} />
+      <sphereGeometry args={[size, 16, 16]} />
+      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.3} />
     </mesh>
+  )
+}
+
+function EnhancedObject({ position, color, type, visible = true, size = 0.25 }: {
+  position: Vec3;
+  color: string;
+  type: 'key' | 'c4' | 'star';
+  visible?: boolean;
+  size?: number;
+}) {
+  if (!visible) return null
+
+  return (
+    <group position={position}>
+      {/* Main sphere */}
+      <mesh castShadow>
+        <sphereGeometry args={[size, 20, 20]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.4}
+          metalness={type === 'key' ? 0.8 : 0.2}
+          roughness={type === 'key' ? 0.2 : 0.4}
+        />
+      </mesh>
+
+      {/* Glowing aura */}
+      <mesh>
+        <sphereGeometry args={[size * 1.3, 12, 12]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.1}
+          transparent
+          opacity={0.3}
+        />
+      </mesh>
+
+      {/* Floating animation */}
+      <AnimatedFloat yOffset={0.1} speed={2}>
+        <mesh position={[0, 0.05, 0]}>
+          <sphereGeometry args={[size * 0.7, 8, 8]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={color}
+            emissiveIntensity={0.6}
+            transparent
+            opacity={0.6}
+          />
+        </mesh>
+      </AnimatedFloat>
+    </group>
+  )
+}
+
+function AnimatedFloat({ children, yOffset = 0.1, speed = 1 }: { children: React.ReactNode; yOffset?: number; speed?: number }) {
+  const ref = useRef<THREE.Group>(null!)
+
+  useFrame((state) => {
+    if (ref.current) {
+      ref.current.position.y = Math.sin(state.clock.elapsedTime * speed) * yOffset
+      ref.current.rotation.y = state.clock.elapsedTime * 0.5
+    }
+  })
+
+  return <group ref={ref}>{children}</group>
+}
+
+function InventoryItem({
+  agentPos,
+  type,
+  color,
+  index,
+  size = 0.15
+}: {
+  agentPos: Vec3;
+  type: 'key' | 'c4' | 'star';
+  color: string;
+  index: number;
+  size?: number;
+}) {
+  const ref = useRef<THREE.Group>(null!)
+
+  useFrame((state) => {
+    if (ref.current) {
+      // Position items in a circle above the agent
+      const angle = (index * Math.PI * 2) / 3 + state.clock.elapsedTime * 0.5 // Rotate slowly
+      const radius = 0.8
+      const height = 1.8 + Math.sin(state.clock.elapsedTime * 2 + index) * 0.1 // Bobbing motion
+
+      ref.current.position.set(
+        agentPos[0] + Math.cos(angle) * radius,
+        agentPos[1] + height,
+        agentPos[2] + Math.sin(angle) * radius
+      )
+    }
+  })
+
+  return (
+    <group ref={ref}>
+      <mesh castShadow>
+        <sphereGeometry args={[size, 16, 16]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.5}
+          metalness={type === 'key' ? 0.8 : 0.2}
+          roughness={type === 'key' ? 0.2 : 0.4}
+        />
+      </mesh>
+
+      {/* Glowing trail effect */}
+      <mesh>
+        <sphereGeometry args={[size * 1.2, 8, 8]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.2}
+          transparent
+          opacity={0.4}
+        />
+      </mesh>
+    </group>
+  )
+}
+
+function PickupAnimation({
+  animation,
+  onComplete
+}: {
+  animation: {
+    active: boolean
+    startPos: Vec3
+    endPos: Vec3
+    startTime: number
+    duration: number
+    type: 'key' | 'c4' | 'star'
+    color: string
+  };
+  onComplete: () => void;
+}) {
+  const ref = useRef<THREE.Group>(null!)
+
+  useFrame(() => {
+    if (!animation.active || !ref.current) return
+
+    const now = performance.now()
+    const elapsed = now - animation.startTime
+    const progress = Math.min(elapsed / animation.duration, 1)
+
+    // Smooth easing
+    const eased = 1 - Math.pow(1 - progress, 3)
+
+    // Interpolate position with arc
+    const start = new THREE.Vector3(...animation.startPos)
+    const end = new THREE.Vector3(...animation.endPos)
+    const mid = start.clone().lerp(end, 0.5)
+    mid.y += 1.5 // Arc height
+
+    let currentPos: THREE.Vector3
+    if (eased < 0.5) {
+      currentPos = start.clone().lerp(mid, eased * 2)
+    } else {
+      currentPos = mid.clone().lerp(end, (eased - 0.5) * 2)
+    }
+
+    ref.current.position.copy(currentPos)
+    ref.current.scale.setScalar(1 - eased * 0.3) // Shrink as it approaches agent
+
+    if (progress >= 1) {
+      onComplete()
+    }
+  })
+
+  if (!animation.active) return null
+
+  return (
+    <group ref={ref}>
+      <mesh castShadow>
+        <sphereGeometry args={[0.2, 12, 12]} />
+        <meshStandardMaterial
+          color={animation.color}
+          emissive={animation.color}
+          emissiveIntensity={0.6}
+        />
+      </mesh>
+    </group>
   )
 }
 
@@ -295,6 +558,19 @@ export default function BunkerPage() {
   const [status, setStatus] = useState<string>('')
   const [boom, setBoom] = useState<{ at?: Vec3; t?: number }>({})
 
+  // Pickup animations state
+  const [pickupAnimations, setPickupAnimations] = useState<{
+    [key: string]: {
+      active: boolean
+      startPos: Vec3
+      endPos: Vec3
+      startTime: number
+      duration: number
+      type: 'key' | 'c4' | 'star'
+      color: string
+    }
+  }>({})
+
   // Imperative motion via useFrame
   function AnimateController() {
     useFrame(() => {
@@ -315,7 +591,12 @@ export default function BunkerPage() {
     return null
   }
 
-  const apiRef = useRef<{ moveTo: (n: NodeId) => Promise<void>; explodeAt: (n: NodeId) => Promise<void> } | null>(null)
+  const apiRef = useRef<{
+    moveTo: (n: NodeId) => Promise<void>;
+    explodeAt: (n: NodeId) => Promise<void>;
+    startPickupAnimation: (fromPos: Vec3, type: 'key' | 'c4' | 'star', color: string) => Promise<void>;
+  } | null>(null)
+
   if (apiRef.current == null) {
     apiRef.current = {
       moveTo: (n: NodeId) => {
@@ -335,6 +616,36 @@ export default function BunkerPage() {
         setBoom({ at, t: performance.now() })
         await new Promise((r) => setTimeout(r, 500))
         setBoom({})
+      },
+      startPickupAnimation: (fromPos: Vec3, type: 'key' | 'c4' | 'star', color: string) => {
+        const animId = `${type}_${performance.now()}`
+        const agentPos = agentPosRef.current
+        const endPos: Vec3 = [agentPos[0], agentPos[1] + 1.5, agentPos[2]]
+
+        return new Promise<void>((resolve) => {
+          setPickupAnimations(prev => ({
+            ...prev,
+            [animId]: {
+              active: true,
+              startPos: fromPos,
+              endPos,
+              startTime: performance.now(),
+              duration: 800,
+              type,
+              color
+            }
+          }))
+
+          // Clean up animation after completion
+          setTimeout(() => {
+            setPickupAnimations(prev => {
+              const newAnims = { ...prev }
+              delete newAnims[animId]
+              return newAnims
+            })
+            resolve()
+          }, 800)
+        })
       },
     }
   }
@@ -361,7 +672,7 @@ export default function BunkerPage() {
         state._.keyOnTable = false
       },
       action: async (state) => {
-        await new Promise((r) => setTimeout(r, 200))
+        await apiRef.current!.startPickupAnimation(NODE_POS[N.TABLE], 'key', '#fbbf24')
         state._.hasKey = true
         state._.keyOnTable = false
       },
@@ -387,7 +698,7 @@ export default function BunkerPage() {
         state._.c4Available = false
       },
       action: async (state) => {
-        await new Promise((r) => setTimeout(r, 200))
+        await apiRef.current!.startPickupAnimation(NODE_POS[N.C4_TABLE], 'c4', '#ef4444')
         state._.hasC4 = true
         state._.c4Available = false
       },
@@ -429,7 +740,7 @@ export default function BunkerPage() {
         state._.starPresent = false
       },
       action: async (state) => {
-        await new Promise((r) => setTimeout(r, 150))
+        await apiRef.current!.startPickupAnimation(NODE_POS[N.STAR], 'star', '#fde68a')
         state._.hasStar = true
         state._.starPresent = false
       },
@@ -533,56 +844,76 @@ export default function BunkerPage() {
         <p className="text-gray-300 mb-4">Status: {status || 'Running...'}</p>
 
         <div className="w-full h-[80vh] bg-black rounded-lg overflow-hidden">
-          <Canvas shadows camera={{ position: [0, 6, 12], fov: 50 }}>
+          <Canvas shadows camera={{ position: [0, 12, 24], fov: 50 }}>
 		  	<CameraControls makeDefault />
 			<ambientLight intensity={0.6} />
-            <directionalLight position={[5, 10, 2]} intensity={0.9} castShadow />
+            <directionalLight position={[10, 20, 10]} intensity={0.9} castShadow />
             <AnimateController />
 
             <Ground />
-            {/* Grid helper */}
-            <gridHelper args={[30, 30, '#4b5563', '#374151']} position={[0, 0.01, 0]} />
+            {/* Grid helper - expanded for larger space */}
+            <gridHelper args={[60, 60, '#4b5563', '#374151']} position={[0, 0.01, 0]} />
 
             {/* Buildings and markers */}
             <BoxMarker position={NODE_POS[N.COURTYARD]} color="#2c3e50" label="Courtyard" />
             <BoxMarker position={NODE_POS[N.TABLE]} color="#2f74c0" label="Table" />
 
-            {/* Storage building with door at STORAGE_DOOR (north face) */}
+            {/* Storage building - using calculated positions */}
             <Building
-              center={NODE_POS[N.STORAGE_INT]}
-              size={[5, 3.5, 3.5]}
+              center={BUILDINGS.STORAGE.center}
+              size={BUILDINGS.STORAGE.size}
               color="#3f6212"
               label="Storage"
-              doorFace="east"
+              doorFace={BUILDINGS.STORAGE.doorFace}
               doorColor={world.storageUnlocked ? '#16a34a' : '#a16207'}
               showDoor={!world.storageUnlocked}
-              opacity={world.agentAt === N.STORAGE_INT || world.agentAt === N.C4_TABLE ? 0.3 : 1}
+              opacity={world.agentAt === N.STORAGE_INT || world.agentAt === N.C4_TABLE || world.agentAt === N.STORAGE_DOOR ? 0.3 : 1}
             />
             {/* Reference markers for pathfinding nodes */}
             <BoxMarker position={NODE_POS[N.STORAGE_DOOR]} color={world.storageUnlocked ? '#16a34a' : '#a16207'} label="Storage Door" />
             <BoxMarker position={NODE_POS[N.C4_TABLE]} color="#7f1d1d" label="C4 Table" />
 
-            {/* Bunker building with door at BUNKER_DOOR (west face) */}
+            {/* Bunker building - using calculated positions */}
             <Building
-              center={NODE_POS[N.BUNKER_INT]}
-              size={[5.5, 4, 4]}
+              center={BUILDINGS.BUNKER.center}
+              size={BUILDINGS.BUNKER.size}
               color="#374151"
               label="Bunker"
-              doorFace="west"
+              doorFace={BUILDINGS.BUNKER.doorFace}
               doorColor={world.bunkerBreached ? '#16a34a' : '#7c2d12'}
               showDoor={!world.bunkerBreached}
-              opacity={world.agentAt === N.BUNKER_INT || world.agentAt === N.STAR ? 0.3 : 1}
+              opacity={world.agentAt === N.BUNKER_INT || world.agentAt === N.STAR || world.agentAt === N.BUNKER_DOOR ? 0.3 : 1}
             />
             <BoxMarker position={NODE_POS[N.BUNKER_DOOR]} color={world.bunkerBreached ? '#16a34a' : '#7c2d12'} label="Bunker Door" />
 
             <BoxMarker position={NODE_POS[N.STAR]} color="#6b21a8" label="Star" />
-            <BoxMarker position={NODE_POS[N.SAFE]} color="#0ea5e9" label="Safe" />
+            <BoxMarker position={NODE_POS[N.SAFE]} color="#0ea5e9" label="Safe Spot" />
 
-            {/* Props */}
-            <SmallSphere position={NODE_POS[N.TABLE]} color="#fbbf24" visible={world.keyOnTable} />
-            <SmallSphere position={NODE_POS[N.C4_TABLE]} color="#ef4444" visible={world.c4Available} />
-            <SmallSphere position={NODE_POS[N.BUNKER_DOOR]} color="#ef4444" visible={world.c4Placed} />
-            <SmallSphere position={NODE_POS[N.STAR]} color="#fde68a" visible={world.starPresent} />
+            {/* Objects in world */}
+            <EnhancedObject
+              position={NODE_POS[N.TABLE]}
+              color="#fbbf24"
+              type="key"
+              visible={world.keyOnTable}
+            />
+            <EnhancedObject
+              position={NODE_POS[N.C4_TABLE]}
+              color="#ef4444"
+              type="c4"
+              visible={world.c4Available}
+            />
+            <SmallSphere
+              position={NODE_POS[N.BUNKER_DOOR]}
+              color="#ef4444"
+              visible={world.c4Placed}
+              size={0.2}
+            />
+            <EnhancedObject
+              position={NODE_POS[N.STAR]}
+              color="#fde68a"
+              type="star"
+              visible={world.starPresent}
+            />
 
             {/* Agent */}
             <group>
@@ -590,6 +921,47 @@ export default function BunkerPage() {
               {/* Agent label rendered in world space to avoid double transforms */}
               <LabelSprite position={[agentPos[0], 1.2, agentPos[2]]} text="Agent" />
             </group>
+
+            {/* Inventory items hovering around agent */}
+            {world.hasKey && (
+              <InventoryItem
+                agentPos={agentPos}
+                type="key"
+                color="#fbbf24"
+                index={0}
+              />
+            )}
+            {world.hasC4 && (
+              <InventoryItem
+                agentPos={agentPos}
+                type="c4"
+                color="#ef4444"
+                index={1}
+              />
+            )}
+            {world.hasStar && (
+              <InventoryItem
+                agentPos={agentPos}
+                type="star"
+                color="#fde68a"
+                index={2}
+              />
+            )}
+
+            {/* Pickup animations */}
+            {Object.entries(pickupAnimations).map(([id, animation]) => (
+              <PickupAnimation
+                key={id}
+                animation={animation}
+                onComplete={() => {
+                  setPickupAnimations(prev => {
+                    const newAnims = { ...prev }
+                    delete newAnims[id]
+                    return newAnims
+                  })
+                }}
+              />
+            ))}
 
             {/* Explosion VFX */}
             {boom.at && (
