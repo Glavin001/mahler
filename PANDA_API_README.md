@@ -4,13 +4,19 @@ This project contains helper scripts to compile the [PandaPIengine](https://gith
 
 ## Quick build with Docker
 
-The simplest way to produce the WebAssembly and JavaScript loader is via Docker. The following command builds the engine and writes the artifacts to `examples/pandapiengine/`:
+The simplest way to produce the WebAssembly and JavaScript loader is via Docker. Run the helper script to build the engine and export the artifacts to `examples/pandapiengine/`:
 
 ```bash
-docker build -f Dockerfile.pandapiengine -o examples/pandapiengine .
+./scripts/build_pandapiengine_docker.sh
 ```
 
 This requires Docker with BuildKit enabled (default on modern versions).
+
+To choose a different output directory, pass it as the first argument:
+
+```bash
+./scripts/build_pandapiengine_docker.sh /path/to/output
+```
 
 ## Running the demo
 

@@ -5,6 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git cmake make g++ gengetopt \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Emscripten's npm dependencies to enable --emit-tsd TypeScript generation
+RUN npm -C /emsdk/upstream/emscripten ci || npm -C /emsdk/upstream/emscripten install
+
 WORKDIR /src
 COPY scripts/build_pandapiengine_wasm.sh ./
 RUN ./build_pandapiengine_wasm.sh /dist
