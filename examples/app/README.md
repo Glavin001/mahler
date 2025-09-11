@@ -1,52 +1,105 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This is a [Next.js](https://nextjs.org) app that integrates a Fluid HTN planner compiled to WebAssembly and tested with [Vitest](https://vitest.dev/). It runs planner calls on Node worker threads to keep the main thread responsive.
 
-## Getting Started
+## Prerequisites
 
-First, run the development server:
+- Node.js 20.11+ (or 22.x). NPM 10+ recommended.
+- Docker (required to build the Fluid HTN WASM AppBundle).
+
+## Install
+
+```bash
+npm install
+```
+
+## Development
+
+Start the dev server:
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Open http://localhost:3000
+- Edit `app/page.tsx` (hot reload enabled).
 
 ## Fluid HTN (C# → WASM)
 
-This app integrates a Fluid HTN planner compiled to WebAssembly. Build the WASM AppBundle and sync it into `public/fluidhtn/_framework` with:
+Build the WASM AppBundle and copy it to `public/fluidhtn/_framework`:
 
 ```bash
 npm run build:fluidhtn
 ```
 
-- This runs the repo script `scripts/build_fluidhtn_docker.sh` via Docker and copies the generated AppBundle to `examples/app/public/fluidhtn/`.
-- Rebuild any time you change `scripts/fluidhtn/PlannerBridge.cs`.
+- This calls `scripts/build_fluidhtn_docker.sh` (Docker required) and syncs the generated bundle into `examples/app/public/fluidhtn/`.
+- Rebuild whenever you change files under `scripts/fluidhtn/` (e.g. `PlannerBridge.cs`).
 
-## Tests (Node + worker threads)
+## Testing (Vitest + worker threads)
 
-Tests run the planner on a separate Node worker thread to avoid blocking and to respect timeouts.
+All tests use Vitest and invoke the planner on Node worker threads to avoid blocking and timeouts.
+
+Run the full suite:
 
 ```bash
 npm test
 ```
 
-- Demo test verifies `PlannerBridge.RunDemo()` end-to-end.
-- Bunker tests exercise goal-based plans; some may currently return TIMEOUT until the domain logic is finalized.
+Watch mode (interactive):
+
+```bash
+npx vitest
+```
+
+Included tests (TypeScript + legacy JavaScript):
+
+- `src/tests/fluidhtn.spec.ts`
+- `src/tests/fluidhtn.test.js`
+- `src/tests/fluidhtn-goals.test.js`
+- `src/tests/fluidhtn-demo.test.js`
+
+Key details:
+
+- The WASM bundle must exist at `public/fluidhtn/_framework/` (run `npm run build:fluidhtn` first).
+- Tests compute the .NET boot script URL using:
+  - `new URL('../../public/fluidhtn/_framework/dotnet.js', import.meta.url).href` (TS/ESM), or
+  - `pathToFileURL(path.join(process.cwd(), 'public', 'fluidhtn', '_framework', 'dotnet.js')).href` (legacy JS).
+- Worker helpers are provided in `src/lib/fluidhtn.ts`:
+  - `runDemoOnWorker(dotnetUrl)`
+  - `planGoalOnWorker(dotnetUrl, goalKey)`
+  - `planJsonOnWorker(dotnetUrl, payload)`
+- Global timeouts are set in `vitest.config.ts` (`testTimeout: 30s`, `hookTimeout: 60s`).
+- Legacy `.js` tests and `.ts` tests are both included via `include: ['src/**/*.{test,spec}.{ts,js}']`.
+
+Enable verbose planner logs from C# during tests:
+
+```bash
+FLUIDHTN_DEBUG=1 npm test
+```
+
+## TypeScript notes
+
+- App is TypeScript-first. See `tsconfig.json` (ESNext, bundler resolution, strict on, JSX preserved).
+- When importing internal modules in tests, prefer the explicit `.ts` extension if a `.js` CommonJS twin exists (e.g. `import '../lib/fluidhtn.ts'`) to avoid resolving the CJS helper by accident.
+
+## Troubleshooting
+
+- Tests freeze or time out:
+  - Ensure you are calling `planGoalOnWorker` / `planJsonOnWorker` (worker-based), not the main-thread variants.
+  - Confirm the WASM bundle exists under `public/fluidhtn/_framework/`.
+  - Increase timeouts in `vitest.config.ts` if needed.
+- MONO_WASM "Error loading symbol file dotnet.native.js.symbols": harmless for tests; symbol files may be absent.
+- Engine warnings:
+  - The project pins `vite@^6` for wide Node 20+/22+ compatibility.
+
+## Useful scripts
+
+- `npm run dev` — Next.js dev server
+- `npm run build` — Next.js production build
+- `npm start` — Next.js production server
+- `npm test` — Vitest (run once). Use `npx vitest` for watch/UI.
+- `npm run build:fluidhtn` — Build and copy the Fluid HTN WASM AppBundle via Docker
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
+- Next.js: https://nextjs.org/docs
+- Vitest: https://vitest.dev/
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

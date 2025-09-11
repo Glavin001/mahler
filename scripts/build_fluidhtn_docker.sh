@@ -36,6 +36,16 @@ if [[ -f "$OUT_DIR/dotnet.js" || -f "$OUT_DIR/_framework/dotnet.js" ]]; then
     echo "[fluidhtn] Found assembly: FluidHtnWasm.dll"
   fi
   echo "[fluidhtn] Artifacts are ready in: $OUT_DIR"
+  # If generated TS exists, sync it to Next app for DX
+  GEN_SRC="$OUT_DIR/generated/fluidhtn"
+  GEN_DST="$REPO_ROOT/examples/app/src/generated/fluidhtn"
+  if [[ -d "$GEN_SRC" ]]; then
+    echo "[fluidhtn] Found generated TS types; copying to $GEN_DST"
+    mkdir -p "$GEN_DST"
+    rsync -a --delete "$GEN_SRC/" "$GEN_DST/"
+  else
+    echo "[fluidhtn] No generated TS types found (optional)."
+  fi
 
   # Auto-sync AppBundle into Next.js public folder for local dev
   if [[ -d "$REPO_ROOT/examples/app/public" ]]; then

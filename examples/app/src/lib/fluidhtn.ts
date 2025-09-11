@@ -8,30 +8,30 @@ export type BunkerGoalKey =
   | 'agentAt_c4_table'
   | 'agentAt_star';
 
+import type { DotnetExports } from '../generated/fluidhtn/exports';
+
 export async function loadDotnet(dotnetUrl: string) {
   const mod = await import(/* @vite-ignore */ dotnetUrl);
   const { dotnet } = mod as any;
   const { getAssemblyExports, getConfig } = await dotnet.create();
   const config = getConfig();
-  const exports = await getAssemblyExports(config.mainAssemblyName);
+  const exports = (await getAssemblyExports(config.mainAssemblyName)) as DotnetExports;
   // Enable C# side debug logs only when explicitly requested
   try {
     if (typeof process !== 'undefined' && process?.env?.FLUIDHTN_DEBUG === '1') {
       exports.FluidHtnWasm.PlannerBridge.EnablePlannerDebug(true);
     }
   } catch {}
-  return { exports } as {
-    exports: any;
-  };
+  return { exports } as { exports: DotnetExports };
 }
 
-export async function planGoal(exports: any, goal: BunkerGoalKey) {
-  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerGoal(goal) as string;
+export async function planGoal(exports: DotnetExports, goal: BunkerGoalKey) {
+  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerGoal(goal);
 }
 
-export async function planJson(exports: any, payload: unknown) {
+export async function planJson(exports: DotnetExports, payload: unknown) {
   const json = JSON.stringify(payload);
-  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerJson(json) as string;
+  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerJson(json);
 }
 
 // Node worker-threaded helpers (non-blocking)
@@ -43,7 +43,7 @@ export type WorkerPlanCmd =
 
 export async function withFluidWorker<T = any>(dotnetUrl: string, message: WorkerPlanCmd): Promise<T> {
   const { Worker } = await import('worker_threads');
-  const worker = new Worker(new URL('./fluidhtn-worker.mjs', import.meta.url), { type: 'module' });
+  const worker = new Worker(new URL('./fluidhtn-worker.mjs', import.meta.url));
   try {
     // Initialize
     await new Promise<void>((resolve, reject) => {

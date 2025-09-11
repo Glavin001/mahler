@@ -20,6 +20,7 @@
 # production
 /build
 /public/fluidhtn/
+/src/generated/
 
 # misc
 .DS_Store
