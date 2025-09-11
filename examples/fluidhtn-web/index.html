@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fluid HTN (Web Worker + WASM)</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      button { padding: 8px 12px; font-size: 14px; }
+      pre { background: #111; color: #0f0; padding: 12px; border-radius: 6px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h2>Fluid HTN (WebAssembly in a Web Worker)</h2>
+    <p>This runs the planner inside a Web Worker using the .NET WebAssembly runtime. No server calls.</p>
+    <div>
+      <button id="runBtn">Run Planner</button>
+    </div>
+    <h3>Result</h3>
+    <pre id="out">(click "Run Planner")</pre>
+
+    <script type="module">
+      const out = document.getElementById('out');
+      const runBtn = document.getElementById('runBtn');
+      let startTime = 0;
+
+      const worker = new Worker('./worker.js', { type: 'module' });
+      worker.onmessage = (e) => {
+        const { type, plan, message } = e.data || {};
+        if (type === 'result') {
+          const elapsed = Math.round(performance.now() - startTime);
+          out.textContent = `${plan} (${elapsed} ms)`;
+          runBtn.disabled = false;
+        } else if (type === 'error') {
+          const elapsed = Math.round(performance.now() - startTime);
+          out.textContent = `Error: ${message} (${elapsed} ms)`;
+          runBtn.disabled = false;
+        }
+      };
+
+      runBtn.addEventListener('click', () => {
+        startTime = performance.now();
+        runBtn.disabled = true;
+        out.textContent = 'Running...';
+        worker.postMessage({ type: 'run' });
+      });
+    </script>
+  </body>
+  </html>
+
+
