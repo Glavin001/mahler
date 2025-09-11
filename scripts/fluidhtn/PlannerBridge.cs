@@ -1172,8 +1172,12 @@ public static partial class PlannerBridge
             (Nodes.Courtyard, Nodes.StorageDoor,    _ => true),
             (Nodes.Courtyard, Nodes.BunkerDoor,     _ => true),
             (Nodes.Courtyard, Nodes.SafeSpot,       _ => true),
+            // Sync with TS world: direct table <-> storage door link
+            (Nodes.TableArea, Nodes.StorageDoor,    _ => true),
             (Nodes.StorageDoor, Nodes.StorageInterior, w => w.StorageUnlocked),
             (Nodes.StorageInterior, Nodes.C4Table,  _ => true),
+            // Sync with TS world: allow direct storage door <-> bunker door link
+            (Nodes.StorageDoor, Nodes.BunkerDoor,   _ => true),
             (Nodes.BunkerDoor, Nodes.BunkerInterior, w => w.BunkerBreached),
             (Nodes.BunkerDoor, Nodes.SafeSpot,      _ => true),
             (Nodes.BunkerInterior, Nodes.StarPos,   _ => true),
