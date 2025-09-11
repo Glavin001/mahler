@@ -42,6 +42,13 @@ parentPort.on('message', async (msg) => {
       parentPort.postMessage({ type: 'result', result });
       return;
     }
+    if (cmd === 'planRequest') {
+      const E = await ensureExports(msg.dotnetUrl);
+      const json = typeof msg.json === 'string' ? msg.json : JSON.stringify(msg.json ?? msg.request ?? {});
+      const result = E.FluidHtnWasm.PlannerBridge.PlanBunkerRequest(json);
+      parentPort.postMessage({ type: 'result', result });
+      return;
+    }
     parentPort.postMessage({ type: 'error', error: `Unknown cmd ${cmd}` });
   } catch (err) {
     parentPort.postMessage({ type: 'error', error: String(err?.message || err) });

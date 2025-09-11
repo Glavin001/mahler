@@ -286,36 +286,37 @@ public static partial class PlannerBridge
     [JSExport]
     public static string PlanBunkerRequest(string requestJson)
     {
-        var req = JsonSerializer.Deserialize<BunkerPlanRequest>(requestJson) ?? new BunkerPlanRequest();
         var ctx = new BunkerContext();
         var planner = new Planner<BunkerContext>();
 
         // Initialize context first, then apply overrides to avoid Init() resetting them
         ctx.Init();
 
-        // Apply initial overrides
-        if (req.initial != null)
+        // Parse JSON manually to avoid reflection-based serialization
+        using (var doc = JsonDocument.Parse(requestJson))
         {
-            if (req.initial.agentAt != null) ctx.AgentAt = req.initial.agentAt;
-            if (req.initial.keyOnTable.HasValue) ctx.KeyOnTable = req.initial.keyOnTable.Value;
-            if (req.initial.c4Available.HasValue) ctx.C4Available = req.initial.c4Available.Value;
-            if (req.initial.starPresent.HasValue) ctx.StarPresent = req.initial.starPresent.Value;
-            if (req.initial.hasKey.HasValue) ctx.HasKey = req.initial.hasKey.Value;
-            if (req.initial.hasC4.HasValue) ctx.HasC4 = req.initial.hasC4.Value;
-            if (req.initial.hasStar.HasValue) ctx.HasStar = req.initial.hasStar.Value;
-            if (req.initial.storageUnlocked.HasValue) ctx.StorageUnlocked = req.initial.storageUnlocked.Value;
-            if (req.initial.c4Placed.HasValue) ctx.C4Placed = req.initial.c4Placed.Value;
-            if (req.initial.bunkerBreached.HasValue) ctx.BunkerBreached = req.initial.bunkerBreached.Value;
-        }
-
-        // Apply goal
-        if (req.goal != null)
-        {
-            ctx.GoalAgentAt = req.goal.agentAt;
-            ctx.GoalHasKey = req.goal.hasKey;
-            ctx.GoalHasC4 = req.goal.hasC4;
-            ctx.GoalBunkerBreached = req.goal.bunkerBreached;
-            ctx.GoalHasStar = req.goal.hasStar;
+            var root = doc.RootElement;
+            if (root.TryGetProperty("initial", out var initial))
+            {
+                if (initial.TryGetProperty("agentAt", out var v) && v.ValueKind == JsonValueKind.String) ctx.AgentAt = v.GetString()!;
+                if (initial.TryGetProperty("keyOnTable", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.KeyOnTable = v.GetBoolean();
+                if (initial.TryGetProperty("c4Available", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.C4Available = v.GetBoolean();
+                if (initial.TryGetProperty("starPresent", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.StarPresent = v.GetBoolean();
+                if (initial.TryGetProperty("hasKey", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.HasKey = v.GetBoolean();
+                if (initial.TryGetProperty("hasC4", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.HasC4 = v.GetBoolean();
+                if (initial.TryGetProperty("hasStar", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.HasStar = v.GetBoolean();
+                if (initial.TryGetProperty("storageUnlocked", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.StorageUnlocked = v.GetBoolean();
+                if (initial.TryGetProperty("c4Placed", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.C4Placed = v.GetBoolean();
+                if (initial.TryGetProperty("bunkerBreached", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) ctx.BunkerBreached = v.GetBoolean();
+            }
+            if (root.TryGetProperty("goal", out var goal))
+            {
+                if (goal.TryGetProperty("agentAt", out var v2) && v2.ValueKind == JsonValueKind.String) ctx.GoalAgentAt = v2.GetString();
+                if (goal.TryGetProperty("hasKey", out v2) && (v2.ValueKind == JsonValueKind.True || v2.ValueKind == JsonValueKind.False)) ctx.GoalHasKey = v2.GetBoolean();
+                if (goal.TryGetProperty("hasC4", out v2) && (v2.ValueKind == JsonValueKind.True || v2.ValueKind == JsonValueKind.False)) ctx.GoalHasC4 = v2.GetBoolean();
+                if (goal.TryGetProperty("bunkerBreached", out v2) && (v2.ValueKind == JsonValueKind.True || v2.ValueKind == JsonValueKind.False)) ctx.GoalBunkerBreached = v2.GetBoolean();
+                if (goal.TryGetProperty("hasStar", out v2) && (v2.ValueKind == JsonValueKind.True || v2.ValueKind == JsonValueKind.False)) ctx.GoalHasStar = v2.GetBoolean();
+            }
         }
 
         static TaskStatus MoveToNode(BunkerContext c, string target)
@@ -328,6 +329,116 @@ public static partial class PlannerBridge
                 c.AgentAt = path[i];
             }
             return TaskStatus.Success;
+        }
+
+        // Procedural fast-paths similar to PlanBunkerGoal for early success
+        bool MoveTo(string target)
+        {
+            var world = BunkerWorld.FromContext(ctx);
+            var path = BunkerWorld.FindPath(world, ctx.AgentAt, target);
+            if (path == null) return false;
+            for (var i = 1; i < path.Count; i++)
+            {
+                ctx.Steps.Add($"MOVE {path[i]}");
+                ctx.AgentAt = path[i];
+            }
+            return true;
+        }
+
+        void EnsureKey()
+        {
+            if (ctx.HasKey) return;
+            if (MoveTo(BunkerWorld.Nodes.TableArea))
+            {
+                if (ctx.AgentAt == BunkerWorld.Nodes.TableArea && ctx.KeyOnTable)
+                {
+                    ctx.Steps.Add("PICKUP_KEY");
+                    ctx.HasKey = true;
+                    ctx.KeyOnTable = false;
+                }
+            }
+        }
+
+        void EnsureHasC4()
+        {
+            if (ctx.HasC4) return;
+            EnsureKey();
+            if (MoveTo(BunkerWorld.Nodes.StorageDoor))
+            {
+                if (!ctx.StorageUnlocked && ctx.HasKey && ctx.AgentAt == BunkerWorld.Nodes.StorageDoor)
+                {
+                    ctx.Steps.Add("UNLOCK_STORAGE");
+                    ctx.StorageUnlocked = true;
+                }
+            }
+            if (MoveTo(BunkerWorld.Nodes.C4Table))
+            {
+                if (ctx.AgentAt == BunkerWorld.Nodes.C4Table && ctx.C4Available && !ctx.HasC4)
+                {
+                    ctx.Steps.Add("PICKUP_C4");
+                    ctx.HasC4 = true;
+                    ctx.C4Available = false;
+                }
+            }
+        }
+
+        void EnsureBreach()
+        {
+            if (ctx.BunkerBreached) return;
+            EnsureHasC4();
+            if (MoveTo(BunkerWorld.Nodes.BunkerDoor))
+            {
+                if (ctx.HasC4 && ctx.AgentAt == BunkerWorld.Nodes.BunkerDoor && !ctx.C4Placed)
+                {
+                    ctx.Steps.Add("PLACE_C4");
+                    ctx.HasC4 = false;
+                    ctx.C4Placed = true;
+                }
+            }
+            if (MoveTo(BunkerWorld.Nodes.SafeSpot))
+            {
+                if (ctx.C4Placed && !ctx.BunkerBreached && ctx.AgentAt == BunkerWorld.Nodes.SafeSpot)
+                {
+                    ctx.Steps.Add("DETONATE");
+                    ctx.BunkerBreached = true;
+                    ctx.C4Placed = false;
+                }
+            }
+        }
+
+        // Execute procedural path when possible
+        if (ctx.GoalAgentAt != null && ctx.GoalHasKey != true && ctx.GoalHasC4 != true && ctx.GoalBunkerBreached != true && ctx.GoalHasStar != true)
+        {
+            MoveTo(ctx.GoalAgentAt);
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalHasKey == true)
+        {
+            EnsureKey();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalHasC4 == true)
+        {
+            EnsureHasC4();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalBunkerBreached == true)
+        {
+            EnsureBreach();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalHasStar == true)
+        {
+            EnsureBreach();
+            MoveTo(BunkerWorld.Nodes.BunkerInterior);
+            MoveTo(BunkerWorld.Nodes.StarPos);
+            if (ctx.AgentAt == BunkerWorld.Nodes.StarPos && !ctx.HasStar && ctx.StarPresent)
+            {
+                ctx.Steps.Add("PICKUP_STAR");
+                ctx.HasStar = true;
+                ctx.StarPresent = false;
+            }
+            return string.Join("\n", ctx.Steps);
         }
 
         var domain = new DomainBuilder<BunkerContext>("BunkerDomainDynamic")
@@ -343,6 +454,7 @@ public static partial class PlannerBridge
                     .Condition("Not already there", c => c.AgentAt != c.GoalAgentAt)
                     .Action("Move to goal")
                         .Do(c => MoveToNode(c, c.GoalAgentAt!))
+                        .Effect("Arrive goal", EffectType.PlanAndExecute, (c, _) => c.AgentAt = c.GoalAgentAt!)
                     .End()
                 .End()
 
@@ -352,6 +464,7 @@ public static partial class PlannerBridge
                     .Action("Move to table")
                         .Condition("Missing key", c => !c.HasKey)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.TableArea))
+                        .Effect("Arrive table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.TableArea)
                     .End()
                     .Action("Pickup key")
                         .Condition("At table and present", c => c.AgentAt == BunkerWorld.Nodes.TableArea && c.KeyOnTable && !c.HasKey)
@@ -376,6 +489,7 @@ public static partial class PlannerBridge
                     // unlock and get C4
                     .Action("Move to storage door")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.StorageDoor))
+                        .Effect("Arrive storage door", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.StorageDoor)
                     .End()
                     .Action("Unlock storage")
                         .Condition("Locked and has key", c => !c.StorageUnlocked && c.HasKey && c.AgentAt == BunkerWorld.Nodes.StorageDoor)
@@ -384,6 +498,7 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to C4 table")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.C4Table))
+                        .Effect("Arrive C4 table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.C4Table)
                     .End()
                     .Action("Pickup C4")
                         .Condition("At C4 and available", c => !c.HasC4 && c.AgentAt == BunkerWorld.Nodes.C4Table && c.C4Available)
@@ -399,6 +514,7 @@ public static partial class PlannerBridge
                     .Action("Move to table")
                         .Condition("Missing key", c => !c.HasKey)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.TableArea))
+                        .Effect("Arrive table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.TableArea)
                     .End()
                     .Action("Pickup key")
                         .Condition("Need key", c => !c.HasKey && c.AgentAt == BunkerWorld.Nodes.TableArea && c.KeyOnTable)
@@ -408,6 +524,7 @@ public static partial class PlannerBridge
                     .Action("Move to storage door")
                         .Condition("Need C4", c => !c.HasC4)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.StorageDoor))
+                        .Effect("Arrive storage door", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.StorageDoor)
                     .End()
                     .Action("Unlock storage")
                         .Condition("Need unlock", c => !c.HasC4 && !c.StorageUnlocked && c.HasKey && c.AgentAt == BunkerWorld.Nodes.StorageDoor)
@@ -417,6 +534,7 @@ public static partial class PlannerBridge
                     .Action("Move to C4 table")
                         .Condition("Need C4 move", c => !c.HasC4)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.C4Table))
+                        .Effect("Arrive C4 table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.C4Table)
                     .End()
                     .Action("Pickup C4")
                         .Condition("Pickup C4 cond", c => !c.HasC4 && c.AgentAt == BunkerWorld.Nodes.C4Table && c.C4Available)
@@ -425,6 +543,7 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to bunker door")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.BunkerDoor))
+                        .Effect("Arrive bunker door", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.BunkerDoor)
                     .End()
                     .Action("Place C4")
                         .Condition("Place C4 cond", c => c.HasC4 && c.AgentAt == BunkerWorld.Nodes.BunkerDoor && !c.C4Placed)
@@ -433,6 +552,7 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to safe")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.SafeSpot))
+                        .Effect("Arrive safe", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.SafeSpot)
                     .End()
                     .Action("Detonate")
                         .Condition("Detonate cond", c => c.C4Placed && !c.BunkerBreached && c.AgentAt == BunkerWorld.Nodes.SafeSpot)
@@ -448,6 +568,7 @@ public static partial class PlannerBridge
                     .Action("Move to table")
                         .Condition("Missing key", c => !c.HasKey)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.TableArea))
+                        .Effect("Arrive table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.TableArea)
                     .End()
                     .Action("Pickup key")
                         .Condition("Need key", c => !c.HasKey && c.AgentAt == BunkerWorld.Nodes.TableArea && c.KeyOnTable)
@@ -457,6 +578,7 @@ public static partial class PlannerBridge
                     .Action("Move to storage door")
                         .Condition("Need C4", c => !c.HasC4)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.StorageDoor))
+                        .Effect("Arrive storage door", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.StorageDoor)
                     .End()
                     .Action("Unlock storage")
                         .Condition("Need unlock", c => !c.HasC4 && !c.StorageUnlocked && c.HasKey && c.AgentAt == BunkerWorld.Nodes.StorageDoor)
@@ -466,6 +588,7 @@ public static partial class PlannerBridge
                     .Action("Move to C4 table")
                         .Condition("Need C4 move", c => !c.HasC4)
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.C4Table))
+                        .Effect("Arrive C4 table", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.C4Table)
                     .End()
                     .Action("Pickup C4")
                         .Condition("Pickup C4 cond", c => !c.HasC4 && c.AgentAt == BunkerWorld.Nodes.C4Table && c.C4Available)
@@ -474,6 +597,7 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to bunker door")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.BunkerDoor))
+                        .Effect("Arrive bunker door", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.BunkerDoor)
                     .End()
                     .Action("Place C4")
                         .Condition("Place C4 cond", c => c.HasC4 && c.AgentAt == BunkerWorld.Nodes.BunkerDoor && !c.C4Placed)
@@ -482,6 +606,7 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to safe")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.SafeSpot))
+                        .Effect("Arrive safe", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.SafeSpot)
                     .End()
                     .Action("Detonate")
                         .Condition("Detonate cond", c => c.C4Placed && !c.BunkerBreached && c.AgentAt == BunkerWorld.Nodes.SafeSpot)
@@ -490,9 +615,11 @@ public static partial class PlannerBridge
                     .End()
                     .Action("Move to bunker interior")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.BunkerInterior))
+                        .Effect("Arrive interior", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.BunkerInterior)
                     .End()
                     .Action("Move to star")
                         .Do(c => MoveToNode(c, BunkerWorld.Nodes.StarPos))
+                        .Effect("Arrive star", EffectType.PlanAndExecute, (c, _) => c.AgentAt = BunkerWorld.Nodes.StarPos)
                     .End()
                     .Action("Pickup star")
                         .Condition("At star", c => c.AgentAt == BunkerWorld.Nodes.StarPos && !c.HasStar && c.StarPresent)

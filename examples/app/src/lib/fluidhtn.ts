@@ -1,14 +1,17 @@
-export type BunkerGoalKey =
-  | 'hasStar'
-  | 'hasKey'
-  | 'hasC4'
-  | 'bunkerBreached'
-  | 'agentAt_bunker_door'
-  | 'agentAt_bunker_interior'
-  | 'agentAt_c4_table'
-  | 'agentAt_star';
+// Goal is expressed directly as a flexible object, not as a key
 
-import type { DotnetExports } from '../generated/fluidhtn/exports';
+// Minimal interface of the C# exports we invoke; avoids depending on generated types
+export type DotnetExports = {
+  FluidHtnWasm: {
+    PlannerBridge: {
+      EnablePlannerDebug: (enabled: boolean) => void;
+      RunDemo: () => string;
+      PlanBunkerGoal: (goalKey: string) => string;
+      PlanBunkerJson: (json: string) => string;
+      PlanBunkerRequest: (json: string) => string;
+    };
+  };
+};
 
 export async function loadDotnet(dotnetUrl: string) {
   const mod = await import(/* @vite-ignore */ dotnetUrl);
@@ -25,8 +28,12 @@ export async function loadDotnet(dotnetUrl: string) {
   return { exports } as { exports: DotnetExports };
 }
 
-export async function planGoal(exports: DotnetExports, goal: BunkerGoalKey) {
-  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerGoal(goal);
+export async function planGoal(exports: DotnetExports, request: BunkerPlanRequest | BunkerPlanGoal) {
+  const req: BunkerPlanRequest = 'goal' in (request as any) || 'initial' in (request as any)
+    ? (request as BunkerPlanRequest)
+    : { goal: request as BunkerPlanGoal };
+  const json = JSON.stringify(req);
+  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerRequest(json);
 }
 
 export async function planJson(exports: DotnetExports, payload: unknown) {
@@ -38,8 +45,8 @@ export async function planJson(exports: DotnetExports, payload: unknown) {
 export type WorkerPlanCmd =
   | { cmd: 'init'; dotnetUrl: string }
   | { cmd: 'runDemo'; dotnetUrl: string }
-  | { cmd: 'planGoal'; dotnetUrl: string; goalKey: BunkerGoalKey }
-  | { cmd: 'planJson'; dotnetUrl: string; json: string };
+  | { cmd: 'planJson'; dotnetUrl: string; json: string }
+  | { cmd: 'planRequest'; dotnetUrl: string; json: string };
 
 export async function withFluidWorker<T = any>(dotnetUrl: string, message: WorkerPlanCmd): Promise<T> {
   const { Worker } = await import('worker_threads');
@@ -83,11 +90,50 @@ export async function runDemoOnWorker(dotnetUrl: string) {
   return withFluidWorker<string>(dotnetUrl, { cmd: 'runDemo', dotnetUrl } as WorkerPlanCmd);
 }
 
-export async function planGoalOnWorker(dotnetUrl: string, goal: BunkerGoalKey) {
-  return withFluidWorker<string>(dotnetUrl, { cmd: 'planGoal', dotnetUrl, goalKey: goal } as WorkerPlanCmd);
+export async function planGoalOnWorker(dotnetUrl: string, request: BunkerPlanRequest) {
+  return planRequestOnWorker(dotnetUrl, request);
 }
 
 export async function planJsonOnWorker(dotnetUrl: string, payload: unknown) {
   const json = JSON.stringify(payload);
   return withFluidWorker<string>(dotnetUrl, { cmd: 'planJson', dotnetUrl, json } as WorkerPlanCmd);
 }
+
+// High-level request type matching C# BunkerPlanRequest
+export type BunkerPlanInitial = Partial<{
+  agentAt: string;
+  keyOnTable: boolean;
+  c4Available: boolean;
+  starPresent: boolean;
+  hasKey: boolean;
+  hasC4: boolean;
+  hasStar: boolean;
+  storageUnlocked: boolean;
+  c4Placed: boolean;
+  bunkerBreached: boolean;
+}>;
+
+export type BunkerPlanGoal = Partial<{
+  agentAt: string;
+  hasKey: boolean;
+  hasC4: boolean;
+  bunkerBreached: boolean;
+  hasStar: boolean;
+}>;
+
+export type BunkerPlanRequest = {
+  initial?: BunkerPlanInitial;
+  goal?: BunkerPlanGoal;
+};
+
+export async function planRequest(exports: DotnetExports, request: BunkerPlanRequest) {
+  const json = JSON.stringify(request);
+  return exports.FluidHtnWasm.PlannerBridge.PlanBunkerRequest(json);
+}
+
+export async function planRequestOnWorker(dotnetUrl: string, request: BunkerPlanRequest) {
+  const json = JSON.stringify(request);
+  return withFluidWorker<string>(dotnetUrl, { cmd: 'planRequest', dotnetUrl, json } as WorkerPlanCmd);
+}
+
+// Removed key-based mapping in favor of flexible goal object API

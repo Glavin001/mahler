@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { runDemoOnWorker } = require('../lib/fluidhtn.js');
+const { runDemoOnWorker } = require('../lib/fluidhtn.cjs');
 
 describe('FluidHTN WASM demo', () => {
 	let dotnetUrl;

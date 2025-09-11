@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { planGoalOnWorker } = require('../lib/fluidhtn.js');
+const { planGoalOnWorker } = require('../lib/fluidhtn.cjs');
 
 describe('FluidHTN WASM basic', () => {
 	let dotnetUrl;

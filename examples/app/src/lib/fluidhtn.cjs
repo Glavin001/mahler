@@ -42,8 +42,3 @@ module.exports = {
 	planGoalOnWorker,
 	planJsonOnWorker,
 };
-
-
-
-
-
