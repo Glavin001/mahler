@@ -14,6 +14,12 @@ export async function loadDotnet(dotnetUrl: string) {
   const { getAssemblyExports, getConfig } = await dotnet.create();
   const config = getConfig();
   const exports = await getAssemblyExports(config.mainAssemblyName);
+  // Enable C# side debug logs only when explicitly requested
+  try {
+    if (typeof process !== 'undefined' && process?.env?.FLUIDHTN_DEBUG === '1') {
+      exports.FluidHtnWasm.PlannerBridge.EnablePlannerDebug(true);
+    }
+  } catch {}
   return { exports } as {
     exports: any;
   };

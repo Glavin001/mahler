@@ -53,8 +53,7 @@ function getBuildingDoorPosition(building: (typeof BUILDINGS)[keyof typeof BUILD
   switch (building.doorFace) {
     case 'east': return [cx + w / 2 + off, cy, cz]
     case 'west': return [cx - w / 2 - off, cy, cz]
-    case 'south': return [cx, cy, cz + d / 2 + off]
-    case 'north': default: return [cx, cy, cz - d / 2 - off]
+    default: return [cx, cy, cz - d / 2 - off]
   }
 }
 
@@ -125,20 +124,23 @@ export default function BunkerFluidPage() {
       worker.onmessage = (ev) => {
         const { type, steps, elapsedMs, message } = ev.data || {}
         if (type === 'result') {
+          console.log('[bunker-fluid] plan result', { elapsedMs, steps })
           setLastMs(elapsedMs)
           resolve(steps)
         } else if (type === 'error') {
+          console.error('[bunker-fluid] plan error', message)
           reject(new Error(message))
         }
         worker.terminate()
       }
-      worker.postMessage({ type: 'plan' })
+      // Send goalKey and optional debug; default to full mission (hasStar)
+      worker.postMessage({ type: 'plan', goalKey: 'hasStar', enableDebug: false })
     })
 
     const t1 = performance.now()
     // Execute simple animation for movement steps
     setStatus(`Executing plan (${Math.round(t1 - t0)} ms to plan)`)
-	console.log('steps', steps)
+    console.log('[bunker-fluid] executing steps', steps)
 
     for (const s of steps) {
       const [op, arg] = s.split(' ')

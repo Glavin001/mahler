@@ -2,27 +2,55 @@
 // Requires the AppBundle to be served at /fluidhtn/_framework/
 
 self.onmessage = async (e) => {
-  const { type } = e.data || {};
+  const { type, goalKey, enableDebug } = e.data || {};
   if (type !== 'plan') return;
   const t0 = performance.now();
   try {
+    console.log('[fluid-htn.worker] plan: start', { goalKey, enableDebug });
     let dotnetModule;
     try {
       dotnetModule = await import('/fluidhtn/_framework/dotnet.js');
     } catch (err) {
       // Fallback to relative path if hosted differently
+      console.warn('[fluid-htn.worker] primary import failed; trying relative', err);
       dotnetModule = await import('../fluidhtn/_framework/dotnet.js');
     }
     const { dotnet } = dotnetModule;
     const { getAssemblyExports, getConfig } = await dotnet.create();
     const config = getConfig();
     const exports = await getAssemblyExports(config.mainAssemblyName);
-    const planText = exports.FluidHtnWasm.PlannerBridge.PlanBunker();
-    const steps = (planText || '').split('\n').filter(Boolean);
+
+    // Optional: enable C#-side debug output (will prefix lines with #)
+    try {
+      if (enableDebug === true) {
+        exports.FluidHtnWasm.PlannerBridge.EnablePlannerDebug(true);
+        console.log('[fluid-htn.worker] Enabled PlannerBridge debug');
+      }
+    } catch (err) {
+      console.warn('[fluid-htn.worker] EnablePlannerDebug failed', err);
+    }
+
+    let planText;
+    if (goalKey) {
+      console.log('[fluid-htn.worker] calling PlanBunkerGoal', goalKey);
+      planText = exports.FluidHtnWasm.PlannerBridge.PlanBunkerGoal(goalKey);
+    } else {
+      console.log('[fluid-htn.worker] calling PlanBunker (demo mission)');
+      planText = exports.FluidHtnWasm.PlannerBridge.PlanBunker();
+    }
+
+    // Filter lines; drop empty and debug lines beginning with '#'
+    const allLines = (planText || '').split('\n');
+    const steps = allLines.map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
     const t1 = performance.now();
+    console.log('[fluid-htn.worker] plan: done', { elapsedMs: Math.round(t1 - t0), stepsCount: steps.length });
+    if (enableDebug) {
+      console.log('[fluid-htn.worker] plan lines:', steps);
+    }
     self.postMessage({ type: 'result', steps, elapsedMs: Math.round(t1 - t0) });
   } catch (err) {
     const t1 = performance.now();
+    console.error('[fluid-htn.worker] plan: error', err);
     self.postMessage({ type: 'error', message: String(err?.message || err), elapsedMs: Math.round(t1 - t0) });
   }
 };

@@ -13,6 +13,21 @@ namespace FluidHtnWasm;
 
 public static partial class PlannerBridge
 {
+    private static bool s_DebugPlanner = false;
+
+    [JSExport]
+    public static void EnablePlannerDebug(bool enabled)
+    {
+        s_DebugPlanner = enabled;
+    }
+
+    private static void DebugLog(BunkerContext c, string message)
+    {
+        if (s_DebugPlanner)
+        {
+            c.Steps.Add($"# {message}");
+        }
+    }
     [JSExport]
     public static string RunDemo()
     {
@@ -275,6 +290,9 @@ public static partial class PlannerBridge
         var ctx = new BunkerContext();
         var planner = new Planner<BunkerContext>();
 
+        // Initialize context first, then apply overrides to avoid Init() resetting them
+        ctx.Init();
+
         // Apply initial overrides
         if (req.initial != null)
         {
@@ -300,8 +318,6 @@ public static partial class PlannerBridge
             ctx.GoalHasStar = req.goal.hasStar;
         }
 
-        ctx.Init();
-
         static TaskStatus MoveToNode(BunkerContext c, string target)
         {
             var path = BunkerWorld.FindPath(BunkerWorld.FromContext(c), c.AgentAt, target);
@@ -317,9 +333,14 @@ public static partial class PlannerBridge
         var domain = new DomainBuilder<BunkerContext>("BunkerDomainDynamic")
             .Sequence("MissionGoal")
             .Select("GoalSwitch")
+                .Action("Already at goal")
+                    .Condition("At goal", c => c.GoalAgentAt != null && c.AgentAt == c.GoalAgentAt)
+                    .Do(_ => TaskStatus.Success)
+                .End()
                 // agentAt goal: just move
                 .Sequence("Move to target node")
                     .Condition("Goal agentAt", c => c.GoalAgentAt != null)
+                    .Condition("Not already there", c => c.AgentAt != c.GoalAgentAt)
                     .Action("Move to goal")
                         .Do(c => MoveToNode(c, c.GoalAgentAt!))
                     .End()
@@ -510,6 +531,11 @@ public static partial class PlannerBridge
     public static string PlanBunkerGoal(string goalKey)
     {
         var ctx = new BunkerContext();
+        var planner = new Planner<BunkerContext>();
+
+        // Initialize context before setting goal flags to prevent reset
+        ctx.Init();
+
         switch (goalKey)
         {
             case "agentAt_bunker_door": ctx.GoalAgentAt = BunkerWorld.Nodes.BunkerDoor; break;
@@ -525,8 +551,135 @@ public static partial class PlannerBridge
                 ctx.GoalHasStar = true; break;
         }
 
-        var planner = new Planner<BunkerContext>();
-        ctx.Init();
+        DebugLog(ctx, $"PlanBunkerGoal: start AgentAt={ctx.AgentAt}, GoalAgentAt={ctx.GoalAgentAt}, hasKey={ctx.HasKey}, hasC4={ctx.HasC4}, breached={ctx.BunkerBreached}, hasStar={ctx.HasStar}");
+
+        // Fast path for simple agentAt move goals (adjacent or multi-hop ungated path)
+        if (ctx.GoalAgentAt != null && ctx.GoalHasKey != true && ctx.GoalHasC4 != true && ctx.GoalBunkerBreached != true && ctx.GoalHasStar != true)
+        {
+            var world = BunkerWorld.FromContext(ctx);
+            var path = BunkerWorld.FindPath(world, ctx.AgentAt, ctx.GoalAgentAt);
+            DebugLog(ctx, $"FastPath Move: from {ctx.AgentAt} to {ctx.GoalAgentAt} path={(path == null ? "null" : string.Join("->", path))}");
+            if (path != null)
+            {
+                for (var i = 1; i < path.Count; i++)
+                {
+                    ctx.Steps.Add($"MOVE {path[i]}");
+                    ctx.AgentAt = path[i];
+                }
+                DebugLog(ctx, $"FastPath Done. Final AgentAt={ctx.AgentAt}");
+                return string.Join("\n", ctx.Steps);
+            }
+        }
+
+        // Procedural fast-paths for other goals to simplify early testing
+        bool MoveTo(string target)
+        {
+            var world = BunkerWorld.FromContext(ctx);
+            var path = BunkerWorld.FindPath(world, ctx.AgentAt, target);
+            DebugLog(ctx, $"MoveTo: from={ctx.AgentAt} to={target} path={(path == null ? "null" : string.Join("->", path))}");
+            if (path == null) return false;
+            for (var i = 1; i < path.Count; i++)
+            {
+                ctx.Steps.Add($"MOVE {path[i]}");
+                ctx.AgentAt = path[i];
+            }
+            return true;
+        }
+
+        void EnsureKey()
+        {
+            if (ctx.HasKey) return;
+            if (MoveTo(BunkerWorld.Nodes.TableArea))
+            {
+                if (ctx.AgentAt == BunkerWorld.Nodes.TableArea && ctx.KeyOnTable)
+                {
+                    ctx.Steps.Add("PICKUP_KEY");
+                    ctx.HasKey = true;
+                    ctx.KeyOnTable = false;
+                }
+            }
+        }
+
+        void EnsureHasC4()
+        {
+            if (ctx.HasC4) return;
+            EnsureKey();
+            if (MoveTo(BunkerWorld.Nodes.StorageDoor))
+            {
+                if (!ctx.StorageUnlocked && ctx.HasKey && ctx.AgentAt == BunkerWorld.Nodes.StorageDoor)
+                {
+                    ctx.Steps.Add("UNLOCK_STORAGE");
+                    ctx.StorageUnlocked = true;
+                }
+            }
+            if (MoveTo(BunkerWorld.Nodes.C4Table))
+            {
+                if (ctx.AgentAt == BunkerWorld.Nodes.C4Table && ctx.C4Available && !ctx.HasC4)
+                {
+                    ctx.Steps.Add("PICKUP_C4");
+                    ctx.HasC4 = true;
+                    ctx.C4Available = false;
+                }
+            }
+        }
+
+        void EnsureBreach()
+        {
+            if (ctx.BunkerBreached) return;
+            EnsureHasC4();
+            if (MoveTo(BunkerWorld.Nodes.BunkerDoor))
+            {
+                if (ctx.HasC4 && ctx.AgentAt == BunkerWorld.Nodes.BunkerDoor && !ctx.C4Placed)
+                {
+                    ctx.Steps.Add("PLACE_C4");
+                    ctx.HasC4 = false;
+                    ctx.C4Placed = true;
+                }
+            }
+            if (MoveTo(BunkerWorld.Nodes.SafeSpot))
+            {
+                if (ctx.C4Placed && !ctx.BunkerBreached && ctx.AgentAt == BunkerWorld.Nodes.SafeSpot)
+                {
+                    ctx.Steps.Add("DETONATE");
+                    ctx.BunkerBreached = true;
+                    ctx.C4Placed = false;
+                }
+            }
+        }
+
+        if (ctx.GoalHasKey == true)
+        {
+            EnsureKey();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalHasC4 == true)
+        {
+            EnsureHasC4();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalBunkerBreached == true)
+        {
+            EnsureBreach();
+            return string.Join("\n", ctx.Steps);
+        }
+        if (ctx.GoalHasStar == true)
+        {
+            EnsureBreach();
+            if (MoveTo(BunkerWorld.Nodes.BunkerInterior))
+            {
+                // pass
+            }
+            if (MoveTo(BunkerWorld.Nodes.StarPos))
+            {
+                if (ctx.AgentAt == BunkerWorld.Nodes.StarPos && !ctx.HasStar && ctx.StarPresent)
+                {
+                    ctx.Steps.Add("PICKUP_STAR");
+                    ctx.HasStar = true;
+                    ctx.StarPresent = false;
+                }
+            }
+            return string.Join("\n", ctx.Steps);
+        }
 
         static TaskStatus MoveToNode(BunkerContext c, string target)
         {
@@ -543,8 +696,13 @@ public static partial class PlannerBridge
         var domain = new DomainBuilder<BunkerContext>("BunkerDomainDynamicGoal")
             .Sequence("MissionGoal")
             .Select("GoalSwitch")
+                .Action("Already at goal")
+                    .Condition("At goal", c => c.GoalAgentAt != null && c.AgentAt == c.GoalAgentAt)
+                    .Do(_ => TaskStatus.Success)
+                .End()
                 .Sequence("Move to target node")
                     .Condition("Goal agentAt", c => c.GoalAgentAt != null)
+                    .Condition("Not already there", c => c.AgentAt != c.GoalAgentAt)
                     .Action("Move to goal")
                         .Do(c => MoveToNode(c, c.GoalAgentAt!))
                     .End()
@@ -723,6 +881,11 @@ public static partial class PlannerBridge
     public static string PlanBunkerJson(string json)
     {
         var ctx = new BunkerContext();
+        var planner = new Planner<BunkerContext>();
+
+        // Initialize first, then apply overrides parsed from JSON
+        ctx.Init();
+
         using (var doc = JsonDocument.Parse(json))
         {
             var root = doc.RootElement;
@@ -749,12 +912,16 @@ public static partial class PlannerBridge
             }
         }
 
-        var planner = new Planner<BunkerContext>();
-        ctx.Init();
+        // context already initialized; overrides applied
 
         static TaskStatus MoveToNode(BunkerContext c, string target)
         {
-            var path = BunkerWorld.FindPath(BunkerWorld.FromContext(c), c.AgentAt, target);
+            var from = c.AgentAt;
+            var path = BunkerWorld.FindPath(BunkerWorld.FromContext(c), from, target);
+            if (s_DebugPlanner)
+            {
+                c.Steps.Add("# MoveToNode: from=" + from + ", to=" + target + ", path=" + (path == null ? "null" : string.Join("->", path)));
+            }
             if (path == null) return TaskStatus.Failure;
             for (var i = 1; i < path.Count; i++)
             {
@@ -767,8 +934,13 @@ public static partial class PlannerBridge
         var domain = new DomainBuilder<BunkerContext>("BunkerDomainDynamicJson")
             .Sequence("MissionGoal")
             .Select("GoalSwitch")
+                .Action("Already at goal")
+                    .Condition("At goal", c => c.GoalAgentAt != null && c.AgentAt == c.GoalAgentAt)
+                    .Do(_ => TaskStatus.Success)
+                .End()
                 .Sequence("Move to target node")
                     .Condition("Goal agentAt", c => c.GoalAgentAt != null)
+                    .Condition("Not already there", c => c.AgentAt != c.GoalAgentAt)
                     .Action("Move to goal")
                         .Do(c => MoveToNode(c, c.GoalAgentAt!))
                     .End()

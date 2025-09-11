@@ -8,6 +8,11 @@ async function ensureExports(dotnetUrl) {
   const { getAssemblyExports, getConfig } = await dotnet.create();
   const config = getConfig();
   exportsRef = await getAssemblyExports(config.mainAssemblyName);
+  try {
+    if (process?.env?.FLUIDHTN_DEBUG === '1') {
+      exportsRef.FluidHtnWasm.PlannerBridge.EnablePlannerDebug(true);
+    }
+  } catch {}
   return exportsRef;
 }
 
