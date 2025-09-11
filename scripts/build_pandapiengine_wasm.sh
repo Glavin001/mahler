@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-OUT_DIR="$SCRIPT_DIR/../examples/pandapiengine"
+OUT_DIR="${1:-$SCRIPT_DIR/../examples/pandapiengine}"
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR/pandaPIengine.js" "$OUT_DIR/pandaPIengine.wasm"
 TMP_DIR=$(mktemp -d)
