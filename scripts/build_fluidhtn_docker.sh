@@ -36,6 +36,12 @@ if [[ -f "$OUT_DIR/dotnet.js" || -f "$OUT_DIR/_framework/dotnet.js" ]]; then
     echo "[fluidhtn] Found assembly: FluidHtnWasm.dll"
   fi
   echo "[fluidhtn] Artifacts are ready in: $OUT_DIR"
+
+  # Auto-sync AppBundle into Next.js public folder for local dev
+  if [[ -d "$REPO_ROOT/examples/app/public" ]]; then
+    echo "[fluidhtn] Syncing AppBundle into Next public (/fluidhtn)..."
+    bash "$REPO_ROOT/scripts/copy_fluidhtn_to_next_public.sh" || echo "[fluidhtn] Warning: sync to Next public failed"
+  fi
 else
   echo "Warning: Expected artifacts not found in $OUT_DIR" >&2
   echo "Look for build errors above. The Docker build should export files from the published output." >&2

@@ -56,5 +56,33 @@ npx http-server examples/fluidhtn-web -c-1
 
 3. Open the served URL and click "Run Planner".
 
+## Next.js integration (examples/app)
+
+To run the 3D bunker page powered by Fluid HTN:
+
+1) Build the AppBundle:
+
+```bash
+./scripts/build_fluidhtn_docker.sh ./examples/fluidhtn
+```
+
+2) Serve the Next public root with the AppBundle under `/fluidhtn`.
+
+Option A: serve `examples` so `/fluidhtn` is available and Next can reach `/workers`:
+
+```bash
+npx http-server examples -c-1
+# open /app/ and navigate to /bunker-fluid
+```
+
+Option B: copy AppBundle into Next public directory:
+
+```bash
+rm -rf examples/app/public/fluidhtn
+cp -r examples/fluidhtn examples/app/public/fluidhtn
+cd examples/app && npm install && npm run dev
+# open http://localhost:3000/bunker-fluid
+```
+
 
 
