@@ -6,12 +6,6 @@ First, run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
@@ -19,6 +13,28 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Fluid HTN (C# → WASM)
+
+This app integrates a Fluid HTN planner compiled to WebAssembly. Build the WASM AppBundle and sync it into `public/fluidhtn/_framework` with:
+
+```bash
+npm run build:fluidhtn
+```
+
+- This runs the repo script `scripts/build_fluidhtn_docker.sh` via Docker and copies the generated AppBundle to `examples/app/public/fluidhtn/`.
+- Rebuild any time you change `scripts/fluidhtn/PlannerBridge.cs`.
+
+## Tests (Node + worker threads)
+
+Tests run the planner on a separate Node worker thread to avoid blocking and to respect timeouts.
+
+```bash
+npm test
+```
+
+- Demo test verifies `PlannerBridge.RunDemo()` end-to-end.
+- Bunker tests exercise goal-based plans; some may currently return TIMEOUT until the domain logic is finalized.
 
 ## Learn More
 
