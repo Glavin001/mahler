@@ -99,3 +99,21 @@ dist
 
 # TernJS port file
 .tern-port
+
+# WebAssembly binaries
+*.wasm
+
+# macOS
+.DS_Store
+
+# .NET build outputs (if built locally)
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# Fluid HTN WASM exported AppBundle (keep only curated files)
+examples/fluidhtn/*
+!examples/fluidhtn/demo.mjs
+!examples/fluidhtn/.gitignore

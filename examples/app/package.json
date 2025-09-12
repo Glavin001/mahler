@@ -7,12 +7,17 @@
     "build": "next build",
     "start": "next start",
     "lint": "biome check",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "test": "vitest run",
+    "build:fluidhtn": "bash ../../scripts/build_fluidhtn_docker.sh ../../examples/fluidhtn"
   },
   "dependencies": {
     "@react-three/csg": "^4.0.0",
     "@react-three/drei": "^10.7.5",
     "@react-three/fiber": "^9.3.0",
+    "@rjsf/core": "^5.24.13",
+    "@rjsf/utils": "^5.24.13",
+    "@rjsf/validator-ajv8": "^5.24.13",
     "@types/three": "^0.180.0",
     "assert": "^2.1.0",
     "buffer": "^6.0.3",
@@ -32,6 +37,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4"
   }
 }
