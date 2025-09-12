@@ -30,10 +30,10 @@ export default function BunkerFluidPage() {
 
   const [boom, setBoom] = useState<{ at?: Vec3; t?: number }>({})
   const [pickupAnimations, setPickupAnimations] = useState<{ [key: string]: { active: boolean; startPos: Vec3; endPos: Vec3; startTime: number; duration: number; type: 'key' | 'c4' | 'star'; color: string } }>({})
-  const [showPlanVis, setShowPlanVis] = useState(false)
+  const [showPlanVis, setShowPlanVis] = useState(true)
   const [planLinePoints, setPlanLinePoints] = useState<Vec3[]>([])
-  const [planMoveMarkers, setPlanMoveMarkers] = useState<Array<{ i: number; node: NodeId; pos: Vec3 }>>([])
-  const [hoveredStep, setHoveredStep] = useState<number | null>(null)
+  const [planNodeMarkers, setPlanNodeMarkers] = useState<Array<{ node: NodeId; pos: Vec3; steps: Array<{ step: number; text: string }> }>>([])
+  const [hoveredNode, setHoveredNode] = useState<NodeId | null>(null)
   const PLAN_Y_OFFSET = 1.9
 
   const nodeTitle: Record<NodeId, string> = {
@@ -212,22 +212,53 @@ export default function BunkerFluidPage() {
     try {
       const raise = (p: Vec3): Vec3 => [p[0], p[1] + PLAN_Y_OFFSET, p[2]]
       const linePts: Vec3[] = [raise(NODE_POS[nextWorld.agentAt])]
-      const markers: Array<{ i: number; node: NodeId; pos: Vec3 }> = []
-      let cur: NodeId = nextWorld.agentAt
-      let moveIndex = 0
-      for (const s of steps) {
-        const [op, arg] = s.split(' ')
-        if (op === 'MOVE' && arg) {
-          moveIndex += 1
-          const node = arg as NodeId
-          const p = raise(NODE_POS[node])
-          linePts.push(p)
-          markers.push({ i: moveIndex, node, pos: p })
-          cur = node
+      const nodeSteps: Record<string, Array<{ step: number; text: string }>> = {}
+
+      const pretty = (op: string, arg?: string) => {
+        switch (op) {
+          case 'MOVE': return `Move to ${nodeTitle[arg as NodeId] ?? arg}`
+          case 'PICKUP_KEY': return 'Pick up key'
+          case 'UNLOCK_STORAGE': return 'Unlock storage'
+          case 'PICKUP_C4': return 'Pick up C4'
+          case 'PLACE_C4': return 'Place C4'
+          case 'DETONATE': return 'Detonate'
+          case 'PICKUP_STAR': return 'Pick up star'
+          default: return op
         }
       }
+
+      const actionNode = (op: string, arg?: string): NodeId | null => {
+        if (op === 'MOVE' && arg) return arg as NodeId
+        switch (op) {
+          case 'PICKUP_KEY': return N.TABLE
+          case 'UNLOCK_STORAGE': return N.STORAGE_DOOR
+          case 'PICKUP_C4': return N.C4_TABLE
+          case 'PLACE_C4': return N.BUNKER_DOOR
+          case 'DETONATE': return N.SAFE
+          case 'PICKUP_STAR': return N.STAR
+          default: return null
+        }
+      }
+
+      let stepIndex = 0
+      for (const s of steps) {
+        stepIndex += 1
+        const [op, arg] = s.split(' ')
+        const n = actionNode(op, arg)
+        if (n) {
+          if (op === 'MOVE') {
+            linePts.push(raise(NODE_POS[n]))
+          }
+          const key = n
+          ;(nodeSteps[key] ||= []).push({ step: stepIndex, text: pretty(op, arg) })
+        }
+      }
+      const markers = Object.keys(nodeSteps).map((k) => {
+        const node = k as NodeId
+        return { node, pos: raise(NODE_POS[node]), steps: nodeSteps[k].sort((a, b) => a.step - b.step) }
+      })
       setPlanLinePoints(linePts)
-      setPlanMoveMarkers(markers)
+      setPlanNodeMarkers(markers)
     } catch {}
 
     for (const s of steps) {
@@ -384,15 +415,16 @@ export default function BunkerFluidPage() {
             {showPlanVis && planLinePoints.length >= 2 && (
               <Line points={planLinePoints} color="#22d3ee" lineWidth={2} dashed={false} />
             )}
-            {showPlanVis && planMoveMarkers.map((m) => (
-              <group key={`movept_${m.i}`} position={m.pos} onPointerOver={() => setHoveredStep(m.i)} onPointerOut={() => setHoveredStep(null)}>
+            {showPlanVis && planNodeMarkers.map((m) => (
+              <group key={`nodept_${m.node}`} position={m.pos} onPointerOver={() => setHoveredNode(m.node)} onPointerOut={() => setHoveredNode(null)}>
                 <mesh>
                   <sphereGeometry args={[0.12, 12, 12]} />
-                  <meshStandardMaterial color={hoveredStep === m.i ? '#22d3ee' : '#0ea5e9'} />
+                  <meshStandardMaterial color={hoveredNode === m.node ? '#22d3ee' : '#0ea5e9'} />
                 </mesh>
-                <LabelSprite position={[0, 0.5, 0]} text={String(m.i)} />
-                {hoveredStep === m.i && (
-                  <LabelSprite position={[0, 1.0, 0]} text={`${m.i}. ${nodeTitle[m.node]}`} />
+                {/* Step list (multi-line) */}
+                <LabelSprite position={[0, 0.5, 0]} text={m.steps.map(s => `${s.step}. ${s.text}`).join("\n")} />
+                {hoveredNode === m.node && (
+                  <LabelSprite position={[0, 1.1, 0]} text={nodeTitle[m.node]} />
                 )}
               </group>
             ))}

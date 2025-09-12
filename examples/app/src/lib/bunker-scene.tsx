@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { Geometry, Base, Subtraction } from '@react-three/csg'
@@ -44,6 +44,7 @@ export function AgentMesh({ getPos }: { getPos: () => Vec3 }) {
 export function LabelSprite({ position, text, color = '#ffffff', bg = 'rgba(0,0,0,0.55)' }: { position: Vec3; text: string; color?: string; bg?: string }) {
   const textureRef = useRef<THREE.CanvasTexture | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [scale, setScale] = useState<[number, number, number]>([2.4, 0.6, 1])
 
   if (textureRef.current == null) {
     const canvas = document.createElement('canvas')
@@ -60,21 +61,62 @@ export function LabelSprite({ position, text, color = '#ffffff', bg = 'rgba(0,0,
   useEffect(() => {
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.fillStyle = bg
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.fillStyle = color
-    ctx.font = 'bold 56px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 6)
-    textureRef.current!.needsUpdate = true
+    const lines = String(text ?? '').split('\n')
+    if (lines.length <= 1) {
+      // Single-line label: use fixed, readable size like before
+      const fixedWidth = 512
+      const fixedHeight = 128
+      if (canvas.width !== fixedWidth || canvas.height !== fixedHeight) {
+        canvas.width = fixedWidth
+        canvas.height = fixedHeight
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = bg
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = color
+      ctx.font = 'bold 56px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(lines[0] || '', canvas.width / 2, canvas.height / 2 + 6)
+      textureRef.current!.needsUpdate = true
+      setScale([2.4, 0.6, 1])
+    } else {
+      // Multi-line action step label: dynamic sizing
+      const fontSize = 48
+      const lineHeight = Math.floor(fontSize * 1.25)
+      const padX = 32
+      const padY = 24
+      ctx.font = `bold ${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`
+      const maxLineWidth = Math.max(1, ...lines.map((l) => ctx.measureText(l).width))
+      const nextWidth = Math.min(2048, Math.max(256, Math.ceil(maxLineWidth + padX * 2)))
+      const nextHeight = Math.min(1024, Math.max(128, Math.ceil(lines.length * lineHeight + padY * 2)))
+      if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+        canvas.width = nextWidth
+        canvas.height = nextHeight
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = bg
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = color
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      let y = padY
+      for (const l of lines) {
+        ctx.fillText(l, canvas.width / 2, y)
+        y += lineHeight
+      }
+      textureRef.current!.needsUpdate = true
+      const desiredHeight = Math.min(1.6, 0.7 + Math.max(0, lines.length - 1) * 0.14)
+      const aspect = canvas.width / canvas.height
+      const desiredWidth = desiredHeight * aspect
+      setScale([desiredWidth, desiredHeight, 1])
+    }
   }, [text, color, bg])
 
   useEffect(() => () => textureRef.current?.dispose(), [])
 
   return (
-    <sprite position={position} scale={[2.4, 0.6, 1]}>
+    <sprite position={position} scale={scale}>
       <spriteMaterial map={textureRef.current!} transparent depthWrite={false} />
     </sprite>
   )
