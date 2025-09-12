@@ -2,11 +2,11 @@
 // Requires the AppBundle to be served at /fluidhtn/_framework/
 
 self.onmessage = async (e) => {
-  const { type, goalKey, enableDebug } = e.data || {};
-  if (type !== 'plan') return;
+  const { type, goalKey, request, json, enableDebug } = e.data || {};
+  if (type !== 'plan' && type !== 'planRequest' && type !== 'planJson') return;
   const t0 = performance.now();
   try {
-    console.log('[fluid-htn.worker] plan: start', { goalKey, enableDebug });
+    console.log('[fluid-htn.worker] plan: start', { type, goalKey, enableDebug });
     let dotnetModule;
     try {
       dotnetModule = await import('/fluidhtn/_framework/dotnet.js');
@@ -31,7 +31,15 @@ self.onmessage = async (e) => {
     }
 
     let planText;
-    if (goalKey) {
+    if (type === 'planRequest') {
+      const payload = typeof request === 'string' ? request : JSON.stringify(request || {});
+      console.log('[fluid-htn.worker] calling PlanBunkerRequest');
+      planText = exports.FluidHtnWasm.PlannerBridge.PlanBunkerRequest(payload);
+    } else if (type === 'planJson') {
+      const payload = typeof json === 'string' ? json : JSON.stringify(json || {});
+      console.log('[fluid-htn.worker] calling PlanBunkerJson');
+      planText = exports.FluidHtnWasm.PlannerBridge.PlanBunkerJson(payload);
+    } else if (goalKey) {
       console.log('[fluid-htn.worker] calling PlanBunkerGoal', goalKey);
       planText = exports.FluidHtnWasm.PlannerBridge.PlanBunkerGoal(goalKey);
     } else {

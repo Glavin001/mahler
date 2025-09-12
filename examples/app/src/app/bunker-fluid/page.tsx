@@ -3,9 +3,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { CameraControls } from '@react-three/drei'
+import { CameraControls, Line } from '@react-three/drei'
 import { N, NodeId, NODE_POS, BUILDINGS, Vec3 } from '../../lib/bunker-world'
 import { Ground, BoxMarker, AgentMesh, Building, LabelSprite, EnhancedObject, SmallSphere, InventoryItem, PickupAnimation } from '../../lib/bunker-scene'
+import Form from '@rjsf/core'
+import validator from '@rjsf/validator-ajv8'
 
 export default function BunkerFluidPage() {
   const [agentPos, setAgentPos] = useState<Vec3>(NODE_POS[N.COURTYARD])
@@ -28,6 +30,74 @@ export default function BunkerFluidPage() {
 
   const [boom, setBoom] = useState<{ at?: Vec3; t?: number }>({})
   const [pickupAnimations, setPickupAnimations] = useState<{ [key: string]: { active: boolean; startPos: Vec3; endPos: Vec3; startTime: number; duration: number; type: 'key' | 'c4' | 'star'; color: string } }>({})
+  const [showPlanVis, setShowPlanVis] = useState(false)
+  const [planLinePoints, setPlanLinePoints] = useState<Vec3[]>([])
+  const [planMoveMarkers, setPlanMoveMarkers] = useState<Array<{ i: number; node: NodeId; pos: Vec3 }>>([])
+  const [hoveredStep, setHoveredStep] = useState<number | null>(null)
+  const PLAN_Y_OFFSET = 1.9
+
+  const nodeTitle: Record<NodeId, string> = {
+    [N.COURTYARD]: 'Courtyard',
+    [N.TABLE]: 'Table',
+    [N.STORAGE_DOOR]: 'Storage Door',
+    [N.STORAGE_INT]: 'Storage Interior',
+    [N.C4_TABLE]: 'C4 Table',
+    [N.BUNKER_DOOR]: 'Bunker Door',
+    [N.BUNKER_INT]: 'Bunker Interior',
+    [N.STAR]: 'Star',
+    [N.SAFE]: 'Blast Safe Zone',
+  }
+
+  const nodeIds = Object.values(N) as NodeId[]
+
+  const schema = useMemo(() => ({
+    type: 'object',
+    properties: {
+      initial: {
+        type: 'object',
+        title: 'Initial State',
+        properties: {
+          agentAt: { oneOf: nodeIds.map((id) => ({ const: id, title: nodeTitle[id] })) },
+          keyOnTable: { type: 'boolean', title: 'Key On Table' },
+          c4Available: { type: 'boolean', title: 'C4 Available' },
+          starPresent: { type: 'boolean', title: 'Star Present' },
+          hasKey: { type: 'boolean', title: 'Has Key' },
+          hasC4: { type: 'boolean', title: 'Has C4' },
+          hasStar: { type: 'boolean', title: 'Has Star' },
+          storageUnlocked: { type: 'boolean', title: 'Storage Unlocked' },
+          c4Placed: { type: 'boolean', title: 'C4 Placed' },
+          bunkerBreached: { type: 'boolean', title: 'Bunker Breached' },
+        },
+      },
+      goal: {
+        type: 'object',
+        title: 'Goal State',
+        properties: {
+          agentAt: { oneOf: [{ const: '', title: '(none)' }, ...nodeIds.map((id) => ({ const: id, title: nodeTitle[id] }))] },
+          hasKey: { type: 'boolean', title: 'Has Key' },
+          hasC4: { type: 'boolean', title: 'Has C4' },
+          bunkerBreached: { type: 'boolean', title: 'Bunker Breached' },
+          hasStar: { type: 'boolean', title: 'Has Star' },
+        },
+      },
+    },
+  }), [])
+
+  const uiSchema = useMemo(() => ({
+    'ui:submitButtonOptions': { norender: true },
+    initial: {
+      agentAt: { 'ui:widget': 'select' },
+    },
+    goal: {
+      agentAt: { 'ui:widget': 'select' },
+    },
+  }), [])
+
+  const [autoRun, setAutoRun] = useState(false)
+  const [formData, setFormData] = useState<any>({
+    initial: { ...world },
+    goal: { hasStar: true },
+  })
 
   const getAgentPos = () => agentPos
 
@@ -97,6 +167,30 @@ export default function BunkerFluidPage() {
     const t0 = performance.now()
     const worker = new Worker('/workers/fluid-htn.worker.js', { type: 'module' })
 
+    // Reset world to initial from form
+    const nextInitial = formData?.initial || {}
+    const nextWorld = {
+      agentAt: (nextInitial.agentAt as NodeId) ?? N.COURTYARD,
+      keyOnTable: nextInitial.keyOnTable ?? true,
+      c4Available: nextInitial.c4Available ?? true,
+      starPresent: nextInitial.starPresent ?? true,
+      hasKey: nextInitial.hasKey ?? false,
+      hasC4: nextInitial.hasC4 ?? false,
+      hasStar: nextInitial.hasStar ?? false,
+      storageUnlocked: nextInitial.storageUnlocked ?? false,
+      c4Placed: nextInitial.c4Placed ?? false,
+      bunkerBreached: nextInitial.bunkerBreached ?? false,
+    }
+    setWorld(nextWorld)
+    const startPos = NODE_POS[nextWorld.agentAt]
+    agentPosRef.current = startPos
+    setAgentPos(startPos)
+
+    const requestPayload = {
+      initial: { ...nextWorld },
+      goal: { ...(formData?.goal || {}) },
+    }
+
     const steps: string[] = await new Promise((resolve, reject) => {
       worker.onmessage = (ev) => {
         const { type, steps, elapsedMs, message } = ev.data || {}
@@ -108,11 +202,33 @@ export default function BunkerFluidPage() {
         }
         worker.terminate()
       }
-      worker.postMessage({ type: 'plan', goalKey: 'hasStar', enableDebug: false })
+      worker.postMessage({ type: 'planRequest', request: requestPayload, enableDebug: false })
     })
 
     const t1 = performance.now()
     setStatus(`Executing plan (${Math.round(t1 - t0)} ms to plan)`)
+
+    // Build plan visualization from MOVE steps
+    try {
+      const raise = (p: Vec3): Vec3 => [p[0], p[1] + PLAN_Y_OFFSET, p[2]]
+      const linePts: Vec3[] = [raise(NODE_POS[nextWorld.agentAt])]
+      const markers: Array<{ i: number; node: NodeId; pos: Vec3 }> = []
+      let cur: NodeId = nextWorld.agentAt
+      let moveIndex = 0
+      for (const s of steps) {
+        const [op, arg] = s.split(' ')
+        if (op === 'MOVE' && arg) {
+          moveIndex += 1
+          const node = arg as NodeId
+          const p = raise(NODE_POS[node])
+          linePts.push(p)
+          markers.push({ i: moveIndex, node, pos: p })
+          cur = node
+        }
+      }
+      setPlanLinePoints(linePts)
+      setPlanMoveMarkers(markers)
+    } catch {}
 
     for (const s of steps) {
       const [op, arg] = s.split(' ')
@@ -187,7 +303,73 @@ export default function BunkerFluidPage() {
       <div className="p-6">
         <h1 className="text-3xl font-bold text-white mb-2">Bunker (Fluid HTN + WASM)</h1>
         <p className="text-gray-300 mb-4">Status: {status} {lastMs != null ? `(planner ${lastMs} ms)` : ''}</p>
-        <button onClick={runFluidPlan} className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg mb-3">Run Fluid Plan</button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-white font-semibold">Planner Controls</h2>
+              <label className="text-gray-300 text-sm flex items-center gap-2">
+                <input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} /> Auto-run
+              </label>
+            </div>
+            <div className="flex items-center gap-4 mb-3 text-gray-300 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={showPlanVis} onChange={(e) => setShowPlanVis(e.target.checked)} /> Show plan visualization
+              </label>
+            </div>
+            <Form
+              schema={schema as any}
+              uiSchema={uiSchema as any}
+              formData={formData}
+              onChange={(e) => {
+                setFormData(e.formData)
+                if (autoRun) {
+                  // debounce minimal
+                  setTimeout(() => runFluidPlan(), 0)
+                }
+              }}
+              onSubmit={(e) => runFluidPlan()}
+              validator={validator as any}
+            >
+              <></>
+            </Form>
+            <button onClick={runFluidPlan} className="mt-3 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg">Run Plan</button>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 className="text-white font-semibold mb-3">Current State</h2>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-gray-300 text-sm">
+              <div className="opacity-80">Agent At</div>
+              <div className="font-medium">{nodeTitle[world.agentAt]}</div>
+
+              <div className="opacity-80">Key On Table</div>
+              <div className="font-mono">{String(world.keyOnTable)}</div>
+
+              <div className="opacity-80">C4 Available</div>
+              <div className="font-mono">{String(world.c4Available)}</div>
+
+              <div className="opacity-80">Star Present</div>
+              <div className="font-mono">{String(world.starPresent)}</div>
+
+              <div className="opacity-80">Has Key</div>
+              <div className="font-mono">{String(world.hasKey)}</div>
+
+              <div className="opacity-80">Has C4</div>
+              <div className="font-mono">{String(world.hasC4)}</div>
+
+              <div className="opacity-80">Has Star</div>
+              <div className="font-mono">{String(world.hasStar)}</div>
+
+              <div className="opacity-80">Storage Unlocked</div>
+              <div className="font-mono">{String(world.storageUnlocked)}</div>
+
+              <div className="opacity-80">C4 Placed</div>
+              <div className="font-mono">{String(world.c4Placed)}</div>
+
+              <div className="opacity-80">Bunker Breached</div>
+              <div className="font-mono">{String(world.bunkerBreached)}</div>
+            </div>
+            <a href="/" className="inline-block mt-4 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">← Back to Home</a>
+          </div>
+        </div>
 
         <div className="w-full h-[80vh] bg-black rounded-lg overflow-hidden">
           <Canvas shadows camera={{ position: [0, 12, 24], fov: 50 }}>
@@ -197,6 +379,23 @@ export default function BunkerFluidPage() {
 
             <Ground />
             <gridHelper args={[60, 60, '#4b5563', '#374151']} position={[0, 0.01, 0]} />
+
+            {/* Plan visualization */}
+            {showPlanVis && planLinePoints.length >= 2 && (
+              <Line points={planLinePoints} color="#22d3ee" lineWidth={2} dashed={false} />
+            )}
+            {showPlanVis && planMoveMarkers.map((m) => (
+              <group key={`movept_${m.i}`} position={m.pos} onPointerOver={() => setHoveredStep(m.i)} onPointerOut={() => setHoveredStep(null)}>
+                <mesh>
+                  <sphereGeometry args={[0.12, 12, 12]} />
+                  <meshStandardMaterial color={hoveredStep === m.i ? '#22d3ee' : '#0ea5e9'} />
+                </mesh>
+                <LabelSprite position={[0, 0.5, 0]} text={String(m.i)} />
+                {hoveredStep === m.i && (
+                  <LabelSprite position={[0, 1.0, 0]} text={`${m.i}. ${nodeTitle[m.node]}`} />
+                )}
+              </group>
+            ))}
 
             {/* Reference markers and buildings */}
             <BoxMarker position={NODE_POS[N.COURTYARD]} color="#2c3e50" label="Courtyard" />
